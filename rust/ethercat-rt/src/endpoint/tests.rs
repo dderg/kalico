@@ -2133,6 +2133,7 @@ fn suppressed_slot_holds_target_while_peer_advances() {
             motor: 0,
             stepper: 0,
             engage: 1,
+            stepper_oid: 40,
         },
     );
     ctx.run_cycles(5_250_000, 11_000_000);
@@ -2150,6 +2151,7 @@ fn suppressed_slot_holds_target_while_peer_advances() {
             motor: 0xFF,
             stepper: 0xFF,
             engage: 0,
+            stepper_oid: 0xFF,
         },
     );
     assert!(
@@ -2176,6 +2178,7 @@ fn suppress_maps_stepper_index_within_a_shared_axis() {
             motor: 0,
             stepper: 1,
             engage: 1,
+            stepper_oid: 41,
         },
     );
     assert_eq!(ctx.suppressed, vec![false, true]);
@@ -2186,6 +2189,7 @@ fn suppress_maps_stepper_index_within_a_shared_axis() {
             motor: 0,
             stepper: 2,
             engage: 1,
+            stepper_oid: 42,
         },
     );
     assert_eq!(

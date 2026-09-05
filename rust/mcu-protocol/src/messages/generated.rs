@@ -1050,6 +1050,7 @@ pub struct StepperSuppress {
     pub motor: u8,
     pub stepper: u8,
     pub engage: u8,
+    pub stepper_oid: u8,
 }
 
 impl Encode for StepperSuppress {
@@ -1057,6 +1058,7 @@ impl Encode for StepperSuppress {
         put_u8(out, self.motor);
         put_u8(out, self.stepper);
         put_u8(out, self.engage);
+        put_u8(out, self.stepper_oid);
     }
 }
 
@@ -1066,6 +1068,7 @@ impl Decode for StepperSuppress {
             motor: get_u8(c)?,
             stepper: get_u8(c)?,
             engage: get_u8(c)?,
+            stepper_oid: get_u8(c)?,
         })
     }
 }

@@ -36,6 +36,7 @@ struct RingEndpoint {
     grid_index: Arc<AtomicU32>,
     free_cycles: Arc<AtomicU32>,
     reject: Arc<AtomicBool>,
+    drop_response: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     socket_path: String,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -49,16 +50,18 @@ impl RingEndpoint {
         let grid_index = Arc::new(AtomicU32::new(0));
         let free_cycles = Arc::new(AtomicU32::new(1024));
         let reject = Arc::new(AtomicBool::new(false));
+        let drop_response = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
 
         let thread = {
-            let (path, received, grid_index, free_cycles, reject, stop) = (
+            let (path, received, grid_index, free_cycles, reject, drop_response, stop) = (
                 socket_path.clone(),
                 Arc::clone(&received),
                 Arc::clone(&grid_index),
                 Arc::clone(&free_cycles),
                 Arc::clone(&reject),
+                Arc::clone(&drop_response),
                 Arc::clone(&stop),
             );
             std::thread::spawn(move || {
@@ -82,6 +85,9 @@ impl RingEndpoint {
                                 received.lock_ok().extend(msg.lanes);
                                 0
                             };
+                            if drop_response.load(Ordering::Relaxed) {
+                                continue;
+                            }
                             let advance = u64::from(grid_index.load(Ordering::Relaxed));
                             server.respond(&push_sample_runs_response_frame(
                                 correlation_id,
@@ -105,6 +111,7 @@ impl RingEndpoint {
             grid_index,
             free_cycles,
             reject,
+            drop_response,
             stop,
             socket_path,
             thread: Some(thread),
@@ -265,6 +272,7 @@ fn a_ring_endpoint_receives_abutting_sample_runs_for_a_two_span_trajectory() {
                 linear_span(start + SPAN_NS, 1.0, 3.0),
             ])],
         )
+        .and_then(|()| h.sink.progress_mcu(MCU_ID, 0))
         .expect("the ring endpoint accepts the fill");
 
     let runs = h.endpoint.runs();
@@ -338,6 +346,7 @@ fn a_stream_time_hole_closes_one_run_and_re_anchors_the_next() {
     let start = GRID_CLOCK + INTERVAL_NS * 8;
     h.sink
         .send_mcu_frames(MCU_ID, &[frame(vec![linear_span(start, 0.0, 1.0)])])
+        .and_then(|()| h.sink.progress_mcu(MCU_ID, 0))
         .expect("the pre-hole stream is accepted");
     let before = h.endpoint.runs();
     assert_eq!(
@@ -349,6 +358,7 @@ fn a_stream_time_hole_closes_one_run_and_re_anchors_the_next() {
     let rejoin = start + SPAN_NS + INTERVAL_NS * 40;
     h.sink
         .send_mcu_frames(MCU_ID, &[frame(vec![linear_span(rejoin, 1.0, 2.0)])])
+        .and_then(|()| h.sink.progress_mcu(MCU_ID, 0))
         .expect("the post-hole stream is accepted");
     let resumed = &h.endpoint.runs()[before.len()];
     assert_eq!(
@@ -369,6 +379,7 @@ fn grid_feedback_advances_the_filler_so_a_later_fill_lands_on_the_reported_grid(
     let start = GRID_CLOCK + INTERVAL_NS * 8;
     h.sink
         .send_mcu_frames(MCU_ID, &[frame(vec![linear_span(start, 0.0, 1.0)])])
+        .and_then(|()| h.sink.progress_mcu(MCU_ID, 0))
         .expect("first fill accepted");
     let first_len: u64 = h
         .endpoint
@@ -387,6 +398,7 @@ fn grid_feedback_advances_the_filler_so_a_later_fill_lands_on_the_reported_grid(
     let far = GRID_CLOCK + u64::from(advance) * INTERVAL_NS + INTERVAL_NS * 16;
     h.sink
         .send_mcu_frames(MCU_ID, &[frame(vec![linear_span(far, 5.0, 6.0)])])
+        .and_then(|()| h.sink.progress_mcu(MCU_ID, 0))
         .expect("a fill against the advanced grid");
     let last = h.endpoint.runs().last().cloned().expect("runs exist");
     assert_eq!(
@@ -403,6 +415,7 @@ fn a_grid_that_regresses_is_fatal_rather_than_a_silent_reindex() {
     let start = GRID_CLOCK + 500 * INTERVAL_NS + INTERVAL_NS * 8;
     h.sink
         .send_mcu_frames(MCU_ID, &[frame(vec![linear_span(start, 0.0, 1.0)])])
+        .and_then(|()| h.sink.progress_mcu(MCU_ID, 0))
         .expect("the advanced grid is accepted");
 
     h.endpoint.grid_index.store(0, Ordering::Relaxed);
@@ -410,6 +423,7 @@ fn a_grid_that_regresses_is_fatal_rather_than_a_silent_reindex() {
     let error = h
         .sink
         .send_mcu_frames(MCU_ID, &[frame(vec![linear_span(start, 0.0, 1.0)])])
+        .and_then(|()| h.sink.progress_mcu(MCU_ID, 0))
         .expect_err("a grid index below the last observed one must not be adopted");
     let SendError::Fatal(message) = error else {
         panic!("a grid regression must be fatal, got {error:?}");
@@ -427,6 +441,7 @@ fn a_cut_drops_the_staged_runs_and_the_lane_re_anchors_loudly() {
     h.endpoint.free_cycles.store(0, Ordering::Relaxed);
     h.sink
         .send_mcu_frames(MCU_ID, &[frame(deep_spans(start))])
+        .and_then(|()| h.sink.progress_mcu(MCU_ID, 0))
         .expect("the first window is accepted");
     assert!(
         h.filler.lock_ok().wants_drain(),
@@ -444,6 +459,7 @@ fn a_cut_drops_the_staged_runs_and_the_lane_re_anchors_loudly() {
     let resumed = GRID_CLOCK + INTERVAL_NS * 4_000;
     h.sink
         .send_mcu_frames(MCU_ID, &[frame(vec![linear_span(resumed, 42.0, 43.0)])])
+        .and_then(|()| h.sink.progress_mcu(MCU_ID, 0))
         .expect("post-cut motion is accepted");
     let runs = h.endpoint.runs();
     assert!(
@@ -474,6 +490,7 @@ fn a_halt_cuts_the_staged_lane_through_the_pump_sink_hook() {
     h.endpoint.free_cycles.store(0, Ordering::Relaxed);
     h.sink
         .send_mcu_frames(MCU_ID, &[frame(deep_spans(start))])
+        .and_then(|()| h.sink.progress_mcu(MCU_ID, 0))
         .expect("the first window is accepted");
     assert!(h.filler.lock_ok().wants_drain());
 
@@ -492,6 +509,7 @@ fn a_frame_for_an_axis_the_filler_does_not_drive_is_fatal() {
     let error = h
         .sink
         .send_mcu_frames(MCU_ID, &[stray])
+        .and_then(|()| h.sink.progress_mcu(MCU_ID, 0))
         .expect_err("an axis with no setpoint lane must not be silently dropped");
     let SendError::Fatal(message) = error else {
         panic!("an unknown lane must be fatal, got {error:?}");
@@ -518,6 +536,7 @@ fn the_drain_tick_ships_a_window_at_a_time_until_the_stage_is_empty() {
     h.endpoint.free_cycles.store(0, Ordering::Relaxed);
     h.sink
         .send_mcu_frames(MCU_ID, &[frame(very_deep_spans(start))])
+        .and_then(|()| h.sink.progress_mcu(MCU_ID, 0))
         .expect("the first window is accepted");
     let after_send = h.endpoint.runs().len();
 
@@ -542,44 +561,210 @@ fn the_drain_tick_ships_a_window_at_a_time_until_the_stage_is_empty() {
     );
 }
 
-/// The pump re-sends a failed bundle byte-identically. A staged sample stream
-/// is not idempotent the way a slot-addressed ring write is, so a rejected
-/// fill must leave the lane with nothing staged — the retry restages from
-/// scratch and its run re-anchors.
 #[test]
-fn a_rejected_fill_drops_the_stage_so_the_retry_re_anchors() {
-    let h = harness("reject");
-    let start = GRID_CLOCK + INTERVAL_NS * 8;
-    let spans = deep_spans(start);
-    h.endpoint.reject.store(true, Ordering::Relaxed);
-    let error = h
-        .sink
-        .send_mcu_frames(MCU_ID, &[frame(spans.clone())])
-        .expect_err("an endpoint reject must surface");
-    assert!(
-        matches!(error, SendError::Transient(_) | SendError::Fatal(_)),
-        "a reject is an error, got {error:?}"
-    );
-    assert!(
-        !h.filler.lock_ok().wants_drain(),
-        "the failed bundle must not leave views staged for a non-idempotent re-send"
-    );
+fn a_later_window_retries_without_replaying_accepted_trajectory() {
+    use mcu_protocol::codec::Encode;
 
-    h.endpoint.reject.store(false, Ordering::Relaxed);
-    let before = h.endpoint.runs().len();
+    let h = harness("window-retry");
+    let start = GRID_CLOCK + INTERVAL_NS * 8;
+    let spans = very_deep_spans(start);
+    let end = spans.last().unwrap().end_clock;
     h.sink
         .send_mcu_frames(MCU_ID, &[frame(spans)])
-        .expect("the retry is accepted");
+        .expect("accepted once");
+    let mut calls = 0;
+    let mut refused = Vec::new();
+    let error = h
+        .sink
+        .progress_sample_runs_with(MCU_ID, &h.filler, |pending| {
+            calls += 1;
+            if calls == 2 {
+                refused = pending.encoded_to_vec();
+                return Err(SendError::Transient(
+                    "injected pre-submission backpressure".into(),
+                ));
+            }
+            h.sink.call_push_sample_runs(MCU_ID, &h._conn, pending)
+        })
+        .unwrap_err();
+    assert!(matches!(error, SendError::Transient(_)));
+    assert_eq!(h.endpoint.runs().len(), 1);
+    assert_eq!(
+        h.filler
+            .lock_ok()
+            .pending_sample_runs()
+            .unwrap()
+            .unwrap()
+            .encoded_to_vec(),
+        refused
+    );
+    assert_eq!(h.filler.lock_ok().retire_through(AXIS, end), 0);
+    assert!(matches!(h.sink.drain_tick(), DrainTick::Quiet));
     let runs = h.endpoint.runs();
-    assert!(runs.len() > before, "the retry must reach the endpoint");
+    let mut next = GRID_INDEX + 8;
+    for (index, run) in runs.iter().enumerate() {
+        assert_eq!(run.start_index, next);
+        assert_eq!(run.flags & LANE_RUN_FLAG_REANCHOR != 0, index == 0);
+        next += run.samples.len() as u64;
+    }
+    assert_eq!(next, GRID_INDEX + (end - GRID_CLOCK) / INTERVAL_NS);
+    assert!(matches!(h.sink.drain_tick(), DrainTick::Quiet));
+    assert_eq!(h.endpoint.runs().len(), runs.len());
+}
+
+#[test]
+fn reader_playback_before_the_response_can_lock_without_retiring_unsent_motion() {
+    let h = harness("reader-playback");
+    let staged = linear_span(GRID_CLOCK + INTERVAL_NS * 8, 0.0, 1.0);
+    let end = staged.end_clock;
+    h.sink
+        .send_mcu_frames(MCU_ID, &[frame(vec![staged])])
+        .unwrap();
+    h.sink
+        .progress_sample_runs_with(MCU_ID, &h.filler, |pending| {
+            let mut filler = h
+                .filler
+                .try_lock()
+                .expect("the synchronous reader must be able to report playback before replying");
+            assert_eq!(filler.retire_through(AXIS, end), 0);
+            assert_eq!(filler.credit(AXIS), (1, 0));
+            drop(filler);
+            h.sink.call_push_sample_runs(MCU_ID, &h._conn, pending)
+        })
+        .unwrap();
+    assert_eq!(h.endpoint.runs().len(), 1);
+    let mut filler = h.filler.lock_ok();
+    assert_eq!(filler.credit(AXIS), (1, 0));
+    assert_eq!(filler.retire_through(AXIS, end), 1);
+    assert_eq!(filler.credit(AXIS), (1, 1));
+}
+
+#[test]
+fn a_response_cannot_acknowledge_a_replacement_window_after_a_cut() {
+    use mcu_protocol::codec::Encode;
+
+    let h = harness("cut-in-flight");
+    let start = GRID_CLOCK + INTERVAL_NS * 8;
+    h.sink
+        .send_mcu_frames(MCU_ID, &[frame(vec![linear_span(start, 0.0, 1.0)])])
+        .unwrap();
+    let mut replacement_bytes = Vec::new();
+    let error = h
+        .sink
+        .progress_sample_runs_with(MCU_ID, &h.filler, |pending| {
+            let response = h.sink.call_push_sample_runs(MCU_ID, &h._conn, pending)?;
+            h.sink.cut_staged(&[key()]).unwrap();
+            h.sink
+                .send_mcu_frames(MCU_ID, &[frame(vec![linear_span(start, 2.0, 4.0)])])
+                .unwrap();
+            replacement_bytes = h
+                .filler
+                .lock_ok()
+                .pending_sample_runs()
+                .unwrap()
+                .unwrap()
+                .encoded_to_vec();
+            Ok(response)
+        })
+        .unwrap_err();
+    assert!(matches!(error, SendError::Fatal(_)));
+    let mut filler = h.filler.lock_ok();
     assert_eq!(
-        runs[before].flags & LANE_RUN_FLAG_REANCHOR,
-        LANE_RUN_FLAG_REANCHOR,
-        "the retry's first run re-anchors, discarding what the failed attempt left in the ring"
+        filler
+            .pending_sample_runs()
+            .unwrap()
+            .unwrap()
+            .encoded_to_vec(),
+        replacement_bytes
     );
+    assert_eq!(filler.retire_through(AXIS, u64::MAX), 0);
+    assert_eq!(h.endpoint.runs().len(), 1);
+}
+
+#[test]
+fn a_rejected_wire_window_is_fatal_and_halt_discards_retained_output() {
+    let h = harness("fatal-window");
+    let spans = deep_spans(GRID_CLOCK + INTERVAL_NS * 8);
+    h.sink.send_mcu_frames(MCU_ID, &[frame(spans)]).unwrap();
+    h.endpoint.reject.store(true, Ordering::Relaxed);
+    assert!(matches!(
+        h.sink.progress_mcu(MCU_ID, 0),
+        Err(SendError::Fatal(_))
+    ));
+    h.sink
+        .cut_staged(&[AxisKey {
+            mcu_id: MCU_ID,
+            axis: AXIS,
+        }])
+        .unwrap();
+    h.endpoint.reject.store(false, Ordering::Relaxed);
+    assert!(matches!(h.sink.drain_tick(), DrainTick::Quiet));
+    assert!(h.endpoint.runs().is_empty());
+    assert_eq!(h.filler.lock_ok().retire_through(AXIS, u64::MAX), 0);
+}
+
+#[test]
+fn a_lost_reply_after_wire_acceptance_is_not_retryable() {
+    let mut h = harness("lost-reply");
+    h.sink.timeout = Duration::from_millis(250);
+    h.endpoint.drop_response.store(true, Ordering::Relaxed);
+    h.sink
+        .send_mcu_frames(MCU_ID, &[frame(deep_spans(GRID_CLOCK + INTERVAL_NS * 8))])
+        .expect("trajectory accepted");
+    assert!(matches!(
+        h.sink.progress_mcu(MCU_ID, 0),
+        Err(SendError::Fatal(_))
+    ));
     assert_eq!(
-        runs[before].start_index,
-        GRID_INDEX + 8,
-        "the retry restages the whole bundle from its first view"
+        h.endpoint.runs().len(),
+        1,
+        "wire accepted before its reply was lost"
     );
+    h.sink.cut_staged(&[key()]).unwrap();
+    h.endpoint.drop_response.store(false, Ordering::Relaxed);
+    assert!(matches!(h.sink.drain_tick(), DrainTick::Quiet));
+    assert_eq!(
+        h.endpoint.runs().len(),
+        1,
+        "unknown delivery cannot be replayed"
+    );
+}
+
+#[test]
+fn halt_before_ethercat_progress_abandons_views_without_replay_or_retirement() {
+    let h = harness("halt-before-progress");
+    let start = GRID_CLOCK + INTERVAL_NS * 8;
+    let mut queue = crate::pump::AxisQueue::new(2);
+    h.sink
+        .send_mcu_frames(MCU_ID, &[frame(vec![linear_span(start, 0.0, 10.0)])])
+        .unwrap();
+    queue.pushed = 1;
+    for cut in h.sink.cut_staged(&[key()]).unwrap() {
+        queue.credit_cut(cut);
+    }
+    assert_eq!(queue.abandon_accepted(), 1);
+    assert!(matches!(h.sink.drain_tick(), DrainTick::Quiet));
+    assert!(h.endpoint.runs().is_empty());
+    assert_eq!(
+        (queue.retired, queue.abandoned, queue.outstanding()),
+        (0, 1, 0)
+    );
+
+    let resumed = linear_span(start, 0.0, 1.0);
+    let end = resumed.end_clock;
+    h.sink
+        .send_mcu_frames(MCU_ID, &[frame(vec![resumed])])
+        .unwrap();
+    queue.pushed += 1;
+    h.sink.progress_mcu(MCU_ID, 0).unwrap();
+    assert_eq!(h.endpoint.runs().len(), 1);
+    let mut filler = h.filler.lock_ok();
+    filler.retire_through(AXIS, end);
+    let (consumed, retired) = filler.credit(AXIS);
+    queue.credit(crate::pump::RetiredBy::EtherCat, consumed, retired);
+    assert_eq!(
+        (queue.retired, queue.abandoned, queue.outstanding()),
+        (1, 1, 0)
+    );
+    assert_eq!(queue.room(), 2);
 }

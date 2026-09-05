@@ -704,9 +704,12 @@ fn live_retune_pressure_advance_applies_to_plans_after_the_swap() {
     assert_eq!(before.len(), 1, "first move should emit one segment");
 
     let mut chains = vec![trajectory::CompiledChain::default(); 4];
-    chains[3] = trajectory::CompiledChain {
-        stages: vec![trajectory::ChainStage::DerivativeGains { k1: 0.2, k2: 0.0 }],
-    };
+    chains[3] = trajectory::CompiledChain::compile(&[trajectory::PostProcessorInstance::new(
+        "pa",
+        &trajectory::algos::LinearPressureAdvance,
+        vec![0.2],
+    )])
+    .unwrap();
     h.update_axis_chains(AxisChainSet {
         chains,
         followers: Vec::new(),

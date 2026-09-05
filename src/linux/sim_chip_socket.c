@@ -5,6 +5,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 #include "command.h"
 #include "internal.h"
@@ -37,7 +38,8 @@ int sim_chip_socket_connect(const char *path) {
             report_errno("sim_chip_socket connect()", -1);
             shutdown("Unable to connect sim chip socket");
         }
-        usleep(100000);
+        struct timespec retry_delay = { .tv_sec = 0, .tv_nsec = 100000000 };
+        clock_nanosleep(CLOCK_REALTIME, 0, &retry_delay, NULL);
     }
     if (retries <= 0) shutdown("sim chip socket connect timed out");
     snprintf(sockets[sockets_count].path, sizeof(sockets[sockets_count].path),

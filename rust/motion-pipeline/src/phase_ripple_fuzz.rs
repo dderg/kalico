@@ -17,23 +17,19 @@ struct CruiseRamp {
 }
 
 impl TrackSignal for CruiseRamp {
-    fn eval(&self, t: f64) -> f64 {
+    fn eval_pva(&self, t: f64) -> (f64, f64, f64) {
         let ramp_time = (t - self.boundary).max(0.0);
-        self.position
-            + self.velocity * (t - self.start)
-            + 0.5 * self.acceleration * ramp_time * ramp_time
-    }
-
-    fn deriv(&self, t: f64) -> f64 {
-        self.velocity + self.acceleration * (t - self.boundary).max(0.0)
-    }
-
-    fn second_deriv(&self, t: f64) -> f64 {
-        if t <= self.boundary {
-            0.0
-        } else {
-            self.acceleration
-        }
+        (
+            self.position
+                + self.velocity * (t - self.start)
+                + 0.5 * self.acceleration * ramp_time * ramp_time,
+            self.velocity + self.acceleration * ramp_time,
+            if t <= self.boundary {
+                0.0
+            } else {
+                self.acceleration
+            },
+        )
     }
 }
 

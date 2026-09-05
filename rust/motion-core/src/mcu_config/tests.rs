@@ -366,7 +366,7 @@ fn reanchor_axis_targets_are_motor_frame_not_cartesian() {
     // A homing/probe trip's stop position (e.g. bed-mesh or z_tilt's
     // per-point probe descend, both ending in toolhead.set_position) is
     // cartesian. On CoreXY the rebased axis-0/1 values must be A/B motor
-    // positions — the same frame commit_sent_bundle records live pieces
+    // positions — the same frame commit_accepted_bundle records live pieces
     // in — not the raw x/y, or a later cartesian-inverting reader (like
     // motion_state_at_clock) double-transforms an already-correct value.
     let configs = vec![corexy_cfg(), cartesian_z_cfg()];

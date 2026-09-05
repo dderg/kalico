@@ -76,6 +76,25 @@ Two frequencies exist per MCU and they are not interchangeable:
 the primary's clock. Passing a secondary's handle gives you that MCU's
 `clock/nominal`, which is not the shared timeline.
 
+## Acceptance is not playback
+
+The pump transfers each trajectory view to its endpoint once. A successful
+`send_mcu_frames` means acceptance; `progress_mcu` advances delivery without
+transferring those views again. Backpressure after acceptance leaves the
+endpoint responsible for its pending output.
+
+Drain accounting distinguishes accepted (`pushed`), playback-retired, and
+abandoned views. A halt cuts pending output and accounts for abandonment;
+it does not prove that the discarded motion played. Cut receipts reconcile
+the endpoint's odometers without letting delayed pre-cut reports undo that
+accounting.
+
+EtherCAT's wire progress counts are cycles, not trajectory views. The host
+filler retires views from playback clocks, using the slowest motor of a
+logical axis. Its retained, unsent window cannot earn playback credit.
+Synchronous endpoint calls must not hold the filler mutex: the socket reader
+also needs it to process heartbeat playback observations.
+
 ## The rules
 
 1. **Absolute results only.** Never return or store "seconds from now".

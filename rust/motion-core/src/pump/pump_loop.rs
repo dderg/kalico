@@ -163,13 +163,47 @@ impl<S: SpanSink> Pump<S> {
         self.junctions.forget(key);
     }
 
+    fn account_cut(&mut self, keys: &[AxisKey], credits: Vec<super::CutCredit>) {
+        for credit in credits {
+            assert!(
+                keys.contains(&credit.key),
+                "cut returned credit for an unrelated axis"
+            );
+            if let Some(queue) = self.queues.get_mut(&credit.key) {
+                queue.credit_cut(credit);
+            }
+        }
+        for &key in keys {
+            if let Some(queue) = self.queues.get_mut(&key) {
+                let abandoned = queue.abandon_accepted();
+                if abandoned != 0 {
+                    (self.callbacks.on_abandon)(key, abandoned);
+                }
+            }
+        }
+    }
+
     fn halt_keys(
         &mut self,
         keys: impl IntoIterator<Item = AxisKey>,
         kind: HaltKind,
-    ) -> Result<(), SendError> {
+    ) -> Result<(), ()> {
         let keys: Vec<AxisKey> = keys.into_iter().collect();
-        self.sink.cut_staged(&keys)?;
+        let credits = self.sink.cut_staged(&keys).map_err(|error| {
+            tracing::error!(
+                subsystem = "motion",
+                event = "halt_cut_fatal",
+                error = ?error,
+                "endpoint rejected the halt cut"
+            );
+            if let Some(&key) = keys.first() {
+                (self.callbacks.on_fatal_transport)(
+                    key,
+                    &format!("endpoint rejected the halt cut: {error:?}"),
+                );
+            }
+        })?;
+        self.account_cut(&keys, credits);
         for key in keys {
             match kind {
                 HaltKind::Inferred(_) => {
@@ -192,35 +226,29 @@ impl<S: SpanSink> Pump<S> {
         match msg {
             PumpMsg::Shutdown => return false,
             PumpMsg::Flush(keys) => {
-                if let Err(e) = self.sink.flush_keys(&keys) {
-                    tracing::error!(
-                        subsystem = "motion",
-                        event = "stepcompress_flush_fatal",
-                        error = ?e,
-                        "stepcompress flush rejected — invoking fatal-transport action"
-                    );
-                    let reason = e.to_string();
-                    for key in keys {
-                        (self.callbacks.on_fatal_transport)(key, &reason);
+                let credits = match self.sink.flush_keys(&keys) {
+                    Ok(credits) => credits,
+                    Err(e) => {
+                        tracing::error!(
+                            subsystem = "motion",
+                            event = "stepcompress_flush_fatal",
+                            error = ?e,
+                            "stepcompress flush rejected — invoking fatal-transport action"
+                        );
+                        let reason = e.to_string();
+                        for key in keys {
+                            (self.callbacks.on_fatal_transport)(key, &reason);
+                        }
+                        return false;
                     }
-                    return false;
-                }
+                };
+                self.account_cut(&keys, credits);
                 for key in keys {
                     self.abandon_staged(key);
                 }
             }
             PumpMsg::Halt { keys, ack } => {
-                if let Err(error) = self.halt_keys(keys.clone(), HaltKind::Acknowledged) {
-                    tracing::error!(
-                        subsystem = "motion",
-                        event = "halt_cut_fatal",
-                        error = ?error,
-                        "endpoint rejected the halt cut"
-                    );
-                    let reason = format!("endpoint rejected the halt cut: {error:?}");
-                    for key in keys {
-                        (self.callbacks.on_fatal_transport)(key, &reason);
-                    }
+                if self.halt_keys(keys, HaltKind::Acknowledged).is_err() {
                     return false;
                 }
                 self.pending_barrier_acks.push(ack);
@@ -258,8 +286,8 @@ impl<S: SpanSink> Pump<S> {
                         c = q.retired;
                     }
                     if let Some(co) = &mut self.cohort {
-                        if co.participants.contains(&key) {
-                            let prev = co.last_retired.get(&key).copied().unwrap_or(0);
+                        if let Some(participant) = co.participants.get_mut(&key) {
+                            let prev = participant.last_retired;
                             if c < prev {
                                 (self.callbacks.on_drip_stall)(format!(
                                     "drip cohort {}: retired regression on mcu{} axis{}: \
@@ -269,26 +297,31 @@ impl<S: SpanSink> Pump<S> {
                                 self.cohort = None;
                                 break;
                             }
-                            co.last_retired.insert(key, c);
+                            participant.last_retired = c;
                         }
                     }
                 }
             }
             PumpMsg::DripArm(arm) => {
-                let mut baseline = BTreeMap::new();
-                let mut last_retired = BTreeMap::new();
-                for &k in &arm.participants {
-                    let retired = self.queues.get(&k).map_or(0, |q| q.retired);
-                    baseline.insert(k, retired);
-                    last_retired.insert(k, retired);
-                }
+                let participants = arm
+                    .participants
+                    .into_iter()
+                    .map(|key| {
+                        let retired = self.queues.get(&key).map_or(0, |q| q.retired);
+                        (
+                            key,
+                            super::drip::DripParticipant {
+                                baseline: retired,
+                                last_retired: retired,
+                            },
+                        )
+                    })
+                    .collect();
                 let step_deadline = Instant::now() + arm.timeout;
                 self.cohort = Some(DripCohort {
                     id: arm.cohort,
-                    participants: arm.participants.into_iter().collect(),
+                    participants,
                     timeout: arm.timeout,
-                    baseline,
-                    last_retired,
                     step_deadline,
                     execution_floor: 0,
                 });
@@ -463,7 +496,7 @@ impl<S: SpanSink> Pump<S> {
             return;
         }
         if let Some(co) = self.cohort.as_ref() {
-            if !co.participants.contains(&key) {
+            if !co.participants.contains_key(&key) {
                 let id = co.id;
                 (self.callbacks.on_drip_stall)(format!(
                     "drip cohort {id}: enqueue for non-participant \
@@ -673,7 +706,7 @@ impl<S: SpanSink> Pump<S> {
             |key, q, clock| {
                 let dripping = cohort
                     .as_ref()
-                    .is_some_and(|co| co.participants.contains(key));
+                    .is_some_and(|co| co.participants.contains_key(key));
                 match clock {
                     Some((ack_now, freq)) => {
                         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -769,18 +802,18 @@ impl<S: SpanSink> Pump<S> {
         if now < co.step_deadline {
             return;
         }
-        let fully_executed = co.participants.iter().all(|k| {
+        let fully_settled = co.participants.keys().all(|k| {
             self.queues
                 .get(k)
-                .is_none_or(|q| q.spans.is_empty() && q.pushed == q.retired)
+                .is_none_or(|q| q.spans.is_empty() && q.outstanding() == 0)
         });
-        if fully_executed {
+        if fully_settled {
             tracing::warn!(
                 subsystem = "motion",
-                event = "drip_cohort_executed_awaiting_trip",
+                event = "drip_cohort_settled_awaiting_trip",
                 cohort = co.id,
                 execution_floor,
-                "drip cohort fully executed with no trip; the host trip \
+                "drip cohort has no outstanding work and no trip; the host trip \
                  deadline adjudicates — not a stall"
             );
             let co = self.cohort.as_mut().unwrap();
@@ -789,7 +822,7 @@ impl<S: SpanSink> Pump<S> {
         }
         let lagging: Vec<String> = co
             .participants
-            .iter()
+            .keys()
             .map(|k| {
                 format!(
                     "mcu{} axis{}: executed {} queued {} in_flight {}",
@@ -797,9 +830,7 @@ impl<S: SpanSink> Pump<S> {
                     k.axis,
                     co.executed(k, &self.queues),
                     self.queues.get(k).map_or(0, |q| q.spans.len()),
-                    self.queues
-                        .get(k)
-                        .map_or(0, |q| q.pushed.wrapping_sub(q.retired)),
+                    self.queues.get(k).map_or(0, |q| q.outstanding()),
                 )
             })
             .collect();
@@ -836,7 +867,7 @@ impl<S: SpanSink> Pump<S> {
             .consumption_stall
             .observe(stall_key, current_consumed, now);
         if observation.log_due {
-            let awaiting_consumption = q.pushed.wrapping_sub(q.consumed);
+            let awaiting_consumption = q.awaiting_consumption();
             tracing::debug!(
                 subsystem = "motion",
                 event = "pump_stall_full",
@@ -977,10 +1008,25 @@ impl<S: SpanSink> Pump<S> {
         }
     }
 
-    fn send_bundle_logged(&mut self, mcu_id: u32, bundle: &[AxisFrame]) -> Result<(), SendError> {
+    fn send_bundle_logged(
+        &mut self,
+        mcu_id: u32,
+        bundle: &[AxisFrame],
+    ) -> (bool, Result<(), SendError>) {
         let mem_before = self.mem_probe.sample();
         let send_started = Instant::now();
         let send_result = self.sink.send_mcu_frames(mcu_id, bundle);
+        let accepted = send_result.is_ok();
+        let send_result = if accepted {
+            self.commit_accepted_bundle(mcu_id, bundle);
+            let group = self.sink.lane_group(AxisKey {
+                mcu_id,
+                axis: bundle[0].axis,
+            });
+            self.sink.progress_mcu(mcu_id, group)
+        } else {
+            send_result
+        };
         let send_elapsed = send_started.elapsed();
         if send_elapsed >= Duration::from_millis(5) {
             let mem_after = self.mem_probe.sample();
@@ -1013,10 +1059,10 @@ impl<S: SpanSink> Pump<S> {
                 vm_swap_after_kb
             );
         }
-        send_result
+        (accepted, send_result)
     }
 
-    fn commit_sent_bundle(&mut self, mcu_id: u32, bundle: &[AxisFrame]) {
+    fn commit_accepted_bundle(&mut self, mcu_id: u32, bundle: &[AxisFrame]) {
         for af in bundle {
             let key = AxisKey {
                 mcu_id,
@@ -1114,18 +1160,16 @@ impl<S: SpanSink> Pump<S> {
             DrainTick::Quiet => Ok(false),
             DrainTick::Pending => Ok(true),
             DrainTick::Failed { mcu_id, error } => {
-                tracing::error!(
-                    subsystem = "motion",
-                    event = "setpoint_drain_tick_failed",
-                    mcu = mcu_id,
-                    error = ?error,
-                    "setpoint-ring drain tick failed — invoking fatal-transport action"
-                );
-                (self.callbacks.on_fatal_transport)(
-                    AxisKey { mcu_id, axis: 0 },
-                    &format!("setpoint-ring drain tick failed: {error}"),
-                );
-                Err(())
+                let keys: Vec<_> = if matches!(error, SendError::Halted(_)) {
+                    self.queues
+                        .keys()
+                        .copied()
+                        .filter(|key| key.mcu_id == mcu_id)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                self.handle_endpoint_error(AxisKey { mcu_id, axis: 0 }, error, keys)
             }
         }
     }
@@ -1163,7 +1207,7 @@ impl<S: SpanSink> Pump<S> {
         self.guard_spans_not_in_past(mcu_id, &mut bundle, "at send");
         let send_started_ns = super::transit_trace::trace_now_ns();
         let send_started_at = Instant::now();
-        let outcome = self.send_bundle_logged(mcu_id, &bundle);
+        let (accepted, outcome) = self.send_bundle_logged(mcu_id, &bundle);
         let send_elapsed_ns = send_started_at.elapsed().as_nanos() as u64;
         let result = if outcome.is_ok() {
             mcu_protocol::result_codes::OK
@@ -1186,75 +1230,71 @@ impl<S: SpanSink> Pump<S> {
             });
         }
         match outcome {
-            Ok(()) => {
-                self.commit_sent_bundle(mcu_id, &bundle);
-                Ok(true)
-            }
-            Err(SendError::Fatal(e)) => {
-                tracing::error!(
-                    subsystem = "motion",
-                    event = "send_frame_fatal",
-                    mcu = mcu_id,
-                    error = %e,
-                    "pump send_mcu_frames FATAL transport error — invoking fatal-transport action"
-                );
-                (self.callbacks.on_fatal_transport)(
+            Ok(()) => Ok(true),
+            Err(error) => {
+                if let SendError::Transient(reason) = &error {
+                    tracing::error!(
+                        subsystem = "motion",
+                        event = "send_frame_transient",
+                        mcu = mcu_id,
+                        error = %reason,
+                        "pump send_mcu_frames failed"
+                    );
+                    if !accepted {
+                        self.guard_spans_not_in_past(
+                            mcu_id,
+                            &mut bundle,
+                            "after rejected acceptance while scheduling lead ran out",
+                        );
+                    }
+                }
+                self.handle_endpoint_error(
                     AxisKey {
                         mcu_id,
-                        axis: bundle.first().map_or(0, |f| f.axis),
+                        axis: bundle[0].axis,
                     },
-                    &e,
-                );
-                Err(())
-            }
-            Err(SendError::Halted(e)) => {
-                tracing::debug!(
-                    subsystem = "motion",
-                    event = "send_frame_halted",
-                    mcu = mcu_id,
-                    error = %e,
-                    "pump frame met an endpoint halt and was discarded"
-                );
-                if let Err(error) = self.halt_keys(
+                    error,
                     bundle.iter().map(|frame| AxisKey {
                         mcu_id,
                         axis: frame.axis,
                     }),
-                    HaltKind::Inferred(Instant::now()),
-                ) {
-                    tracing::error!(
-                        subsystem = "motion",
-                        event = "halt_cut_fatal",
-                        mcu = mcu_id,
-                        error = ?error,
-                        "endpoint rejected the inferred halt cut"
-                    );
-                    (self.callbacks.on_fatal_transport)(
-                        AxisKey {
-                            mcu_id,
-                            axis: bundle.first().map_or(0, |frame| frame.axis),
-                        },
-                        &format!("endpoint rejected the inferred halt cut: {error:?}"),
-                    );
-                    return Err(());
-                }
+                )?;
                 Ok(false)
             }
-            Err(SendError::Transient(e)) => {
+        }
+    }
+
+    /// A transient failure leaves endpoint progress pending; a halt cuts it.
+    fn handle_endpoint_error(
+        &mut self,
+        key: AxisKey,
+        error: SendError,
+        halt_keys: impl IntoIterator<Item = AxisKey>,
+    ) -> Result<bool, ()> {
+        match error {
+            SendError::Transient(_) => Ok(true),
+            SendError::Halted(reason) => {
+                tracing::debug!(
+                    subsystem = "motion",
+                    event = "pump_endpoint_halted",
+                    mcu = key.mcu_id,
+                    error = %reason,
+                    "pump endpoint halted"
+                );
+                self.halt_keys(halt_keys, HaltKind::Inferred(Instant::now()))?;
+                Ok(false)
+            }
+            SendError::Fatal(reason) => {
                 tracing::error!(
                     subsystem = "motion",
-                    event = "send_frame_transient",
-                    mcu = mcu_id,
-                    error = %e,
-                    "pump send_mcu_frames failed"
+                    event = "pump_endpoint_fatal",
+                    mcu = key.mcu_id,
+                    axis = key.axis,
+                    error = %reason,
+                    "pump endpoint failed — invoking fatal-transport action"
                 );
-                self.guard_spans_not_in_past(
-                    mcu_id,
-                    &mut bundle,
-                    "after a failed send (transport gave no response \
-                     while the view's scheduling lead ran out)",
-                );
-                Ok(false)
+                (self.callbacks.on_fatal_transport)(key, &reason);
+                Err(())
             }
         }
     }
@@ -1294,6 +1334,7 @@ impl<S: SpanSink> Pump<S> {
                         pending: q.spans.len() as u32,
                         pushed: q.pushed,
                         retired: q.retired,
+                        abandoned: q.abandoned,
                         staged_motion: q.staged_motion,
                         hold_tail: q.wire_hold_tail,
                     },

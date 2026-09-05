@@ -174,6 +174,23 @@ impl PostProcessorSet {
         inst.set_param(key, value)?;
         Ok(())
     }
+
+    pub fn compile_active_chains(
+        &self,
+        registry: &AxisRegistry,
+        bypass: bool,
+    ) -> Result<AxisChainSet, PostProcessorConfigError> {
+        if bypass {
+            let chains = (0..registry.n_axes())
+                .map(|_| CompiledChain::compile(&[]).map_err(PostProcessorConfigError::Param))
+                .collect::<Result<_, _>>()?;
+            return Ok(AxisChainSet {
+                chains,
+                followers: registry.follower_index_map(),
+            });
+        }
+        self.compile(registry)
+    }
 }
 
 fn build_instance(
@@ -513,22 +530,9 @@ impl PlannerConfig {
             .unwrap_or(self.cartesian.corner_deviation)
     }
 
-    /// The chains the pipeline should run right now: the configured
-    /// post-processors, or identity chains while `post_processor_bypass`
-    /// is set. Every live chain push must come through here so a
-    /// parameter update during a bypass window cannot silently re-arm
-    /// shaping.
     pub fn compile_active_chains(&self) -> Result<AxisChainSet, PostProcessorConfigError> {
-        if self.post_processor_bypass {
-            let chains = (0..self.axis_registry.n_axes())
-                .map(|_| CompiledChain::compile(&[]).map_err(PostProcessorConfigError::Param))
-                .collect::<Result<_, _>>()?;
-            return Ok(AxisChainSet {
-                chains,
-                followers: self.axis_registry.follower_index_map(),
-            });
-        }
-        self.post_processors.compile(&self.axis_registry)
+        self.post_processors
+            .compile_active_chains(&self.axis_registry, self.post_processor_bypass)
     }
 
     #[must_use]

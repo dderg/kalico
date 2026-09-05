@@ -494,6 +494,7 @@ struct SampleLane {
     /// The ring plays in order, so counting from the front is exact.
     in_flight_end_clocks: VecDeque<u64>,
     clock_retired: u32,
+    abandoned_run_floor: u32,
     /// The `now` at which this lane was first seen with a full ring and work
     /// waiting behind it. Delivery that never resumes is a wedged lane, not a
     /// slow one.
@@ -533,6 +534,7 @@ impl SampleLane {
             runs_sent: 0,
             in_flight_end_clocks: VecDeque::new(),
             clock_retired: 0,
+            abandoned_run_floor: 0,
             saturated_since: None,
             seams: VecDeque::new(),
             cut: None,
@@ -549,7 +551,10 @@ impl SampleLane {
     /// the truth, and the count remains the floor whenever the clock report is
     /// the older of the two.
     fn retired_proven(&self, retired: &RetiredRuns) -> Result<u32, SendError> {
-        Ok(retired.of_axis(self.cfg.axis)?.max(self.clock_retired))
+        Ok(retired
+            .of_axis(self.cfg.axis)?
+            .max(self.clock_retired)
+            .max(self.abandoned_run_floor))
     }
 
     fn outstanding_runs(&self, retired: &RetiredRuns) -> Result<u32, SendError> {
@@ -578,6 +583,7 @@ impl SampleLane {
             }
             self.clock_retired = credit;
         }
+        let playback_clock = playback_clock.min(self.wire_next_clock.unwrap_or(0));
         while self
             .unretired_view_ends
             .front()
@@ -1372,6 +1378,62 @@ impl SampleEndpoint {
         Ok(())
     }
 
+    pub fn abort_axes(&mut self, axes: &[u8]) -> Result<Vec<super::CutCredit>, SendError> {
+        let (now, _) = self.clock_now()?;
+        let mut cuts = Vec::with_capacity(axes.len());
+        for &axis in axes {
+            let index = self.lane_of(axis)?;
+            let lane = &mut self.lanes[index];
+            lane.absorb_mcu_reports(&self.mcu_retired)?;
+            let query = self.position_query.as_ref().ok_or_else(|| {
+                SendError::Fatal(format!(
+                    "sample endpoint mcu {} axis {axis}: halt needs position readback",
+                    self.mcu_id
+                ))
+            })?;
+            let (_, position) = query(lane.cfg.oid).map_err(|error| {
+                SendError::Fatal(format!(
+                    "sample endpoint mcu {} axis {axis}: halt readback failed: {error}",
+                    self.mcu_id
+                ))
+            })?;
+            let position = i64::from(position);
+            cuts.push((
+                index,
+                position,
+                super::CutCredit {
+                    key: super::AxisKey {
+                        mcu_id: self.mcu_id,
+                        axis,
+                    },
+                    by: super::RetiredBy::Phase,
+                    before: (lane.consumed, lane.retired),
+                    after: (lane.consumed, lane.retired),
+                },
+            ));
+        }
+        for &(index, position, _) in &cuts {
+            self.backlog
+                .retain(|out| out.lane != index || matches!(out.frame, Outbound::Barrier(_)));
+            let lane = &mut self.lanes[index];
+            lane.seams.clear();
+            lane.cut = None;
+            lane.unretired_view_ends.clear();
+            lane.in_flight_end_clocks.clear();
+            lane.abandoned_run_floor = lane.runs_sent;
+            lane.saturated_since = None;
+            lane.reset_to(position, now);
+            if let Some(buzz) = &mut self.buzz {
+                buzz.lanes.retain(|&buzz_lane| buzz_lane != index);
+            }
+        }
+        if self.buzz.as_ref().is_some_and(|buzz| buzz.lanes.is_empty()) {
+            self.buzz = None;
+        }
+        self.post_heartbeat()?;
+        Ok(cuts.into_iter().map(|(_, _, credit)| credit).collect())
+    }
+
     pub fn mark_reanchor(
         &mut self,
         axis: u8,
@@ -1426,6 +1488,24 @@ impl SampleEndpoint {
         let (now, freq) = self.clock_now()?;
         for frame in frames {
             let index = self.lane_of(frame.axis)?;
+            let lane = self.lane_ref(index)?;
+            let incoming: usize = frames
+                .iter()
+                .filter(|other| other.axis == frame.axis)
+                .map(|other| other.spans.len())
+                .sum();
+            let held = lane.views.len()
+                + usize::from(lane.active.is_some())
+                + lane.cut.as_ref().map_or(0, |cut| cut.held.len());
+            if incoming > (SAMPLE_LANE_PIECE_WINDOW as usize).saturating_sub(held) {
+                return Err(SendError::Transient(format!(
+                    "sample endpoint mcu {mcu_id} axis {}: staging window full",
+                    frame.axis
+                )));
+            }
+        }
+        for frame in frames {
+            let index = self.lane_of(frame.axis)?;
             if let Some(buzz) = self.buzz.as_ref() {
                 if buzz.lanes.contains(&index) {
                     if let Some(absolute) =
@@ -1467,8 +1547,7 @@ impl SampleEndpoint {
                 rest = tail;
             }
         }
-        self.drain_into_backlog(now, freq)?;
-        self.flush(now, freq)
+        Ok(())
     }
 
     /// Returns whether the views past the seam must wait for a barrier.

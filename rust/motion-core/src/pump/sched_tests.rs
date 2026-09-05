@@ -529,3 +529,47 @@ fn a_full_lane_and_a_held_sibling_report_both() {
         (Some(full_key), true)
     );
 }
+
+#[test]
+fn sibling_prefixes_stop_independently_at_each_release_bound() {
+    let mut queues = BTreeMap::new();
+    queues.insert(AxisKey { mcu_id: 1, axis: 0 }, q_with(1, &[0, 10, 20, 30]));
+    queues.insert(AxisKey { mcu_id: 1, axis: 1 }, q_with(8, &[1, 11, 21, 31]));
+    queues.insert(AxisKey { mcu_id: 1, axis: 2 }, q_with(8, &[2, 12, 22, 32]));
+    queues.insert(AxisKey { mcu_id: 1, axis: 3 }, q_with(8, &[3, 13, 23, 33]));
+    queues.insert(AxisKey { mcu_id: 2, axis: 0 }, q_with(8, &[0, 4]));
+    let plan = released(&queues, |key, _| match key.axis {
+        1 => LaneRelease {
+            horizon: None,
+            cap: 2,
+        },
+        2 => until(12),
+        _ => RELEASE_ALL,
+    });
+
+    let Schedule::Send(frames) = schedule(&queues, limits(3), &plan) else {
+        panic!("the earliest MCU has ready lane prefixes");
+    };
+    let actual: Vec<_> = frames
+        .iter()
+        .map(|frame| {
+            (
+                frame.key,
+                frame
+                    .spans
+                    .iter()
+                    .map(|span| span.start_clock)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        vec![
+            (AxisKey { mcu_id: 1, axis: 0 }, vec![0]),
+            (AxisKey { mcu_id: 1, axis: 1 }, vec![1, 11]),
+            (AxisKey { mcu_id: 1, axis: 2 }, vec![2, 12]),
+            (AxisKey { mcu_id: 1, axis: 3 }, vec![3, 13, 23]),
+        ]
+    );
+}

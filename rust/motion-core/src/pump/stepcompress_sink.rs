@@ -539,12 +539,7 @@ pub struct StepcompressEndpoint {
 }
 
 fn shim_error_to_send_error(mcu_id: u32, error: ShimError) -> SendError {
-    match error {
-        ShimError::QueueFull { motor } => SendError::Transient(format!(
-            "stepcompress mcu {mcu_id} motor {motor}: shim span queue full"
-        )),
-        other => SendError::Fatal(format!("stepcompress mcu {mcu_id}: {other:?}")),
-    }
+    SendError::Fatal(format!("stepcompress mcu {mcu_id}: {error:?}"))
 }
 
 const fn step_frame_oid(frame: &StepFrame) -> u32 {
@@ -1074,7 +1069,7 @@ impl StepcompressEndpoint {
         self.post_heartbeat()
     }
 
-    pub fn abort_axes(&mut self, axes: &[u8]) -> Result<(), SendError> {
+    pub fn abort_axes(&mut self, axes: &[u8]) -> Result<Vec<super::CutCredit>, SendError> {
         let clock = self.clock_now()?;
         let motors = axes
             .iter()
@@ -1083,15 +1078,86 @@ impl StepcompressEndpoint {
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
-        self.abort_outbound();
-        for motor in motors {
+        let (reported_axes, consumed) = self.counts_by_axis(&self.shim.consumed_counts());
+        let (_, retired) = self.counts_by_axis(&self.published);
+        let mut credits: Vec<_> = axes
+            .iter()
+            .map(|&axis| {
+                let slot = reported_axes
+                    .iter()
+                    .position(|&reported| reported == axis)
+                    .unwrap();
+                super::CutCredit {
+                    key: super::AxisKey {
+                        mcu_id: self.mcu_id,
+                        axis,
+                    },
+                    by: super::RetiredBy::Pulse,
+                    before: (consumed[slot], retired[slot]),
+                    after: (0, 0),
+                }
+            })
+            .collect();
+        for index in 0..self.backlog.len() {
+            let out = &self.backlog[index];
+            if motors.contains(&out.lane) {
+                if let Outbound::Barrier(id) = out.frame {
+                    self.cancel_barrier(out.lane, id.seq);
+                }
+            }
+        }
+        self.backlog.retain(|out| !motors.contains(&out.lane));
+        self.sent_barriers.retain(|sent| {
+            !motors
+                .iter()
+                .any(|&motor| self.lanes[motor].oid == sent.id.oid)
+        });
+        for &motor in &motors {
             self.shim
                 .halt_at(motor, clock.now)
                 .map_err(|e| shim_error_to_send_error(self.mcu_id, e))?;
-            self.lanes[motor].commanded_base = self.shim.commanded_position(motor);
+            let lane = &mut self.lanes[motor];
+            lane.step_clock = None;
+            lane.last_sent_boundary = None;
+            lane.pending_cut = None;
+            lane.seams.clear();
+            lane.commanded_base = self.shim.commanded_position(motor);
+            if let Some(buzz) = &mut self.buzz {
+                buzz.signals[motor] = None;
+            }
         }
-        self.sync_retirement_baseline();
-        self.post_heartbeat()
+        if self
+            .buzz
+            .as_ref()
+            .is_some_and(|buzz| buzz.signals.iter().all(Option::is_none))
+        {
+            self.buzz = None;
+        }
+        let counts = self.shim.consumed_counts();
+        for &motor in &motors {
+            self.published[motor] = counts[motor];
+            self.cohort_counts[motor] = counts[motor];
+        }
+        if let Some(pending) = &mut self.pending_retire {
+            pending
+                .waits
+                .retain(|id| !motors.iter().any(|&motor| self.lanes[motor].oid == id.oid));
+            for &motor in &motors {
+                pending.counts[motor] = counts[motor];
+            }
+        }
+        self.release_retirements();
+        let (_, consumed) = self.counts_by_axis(&counts);
+        let (_, retired) = self.counts_by_axis(&self.published);
+        for credit in &mut credits {
+            let slot = reported_axes
+                .iter()
+                .position(|&axis| axis == credit.key.axis)
+                .unwrap();
+            credit.after = (consumed[slot], retired[slot]);
+        }
+        self.post_heartbeat()?;
+        Ok(credits)
     }
 
     /// Barriers still queued here never reach the mcu, so nothing will ever
@@ -2089,8 +2155,28 @@ impl StepcompressEndpoint {
             )));
         }
         let clock = self.clock_now()?;
-        for frame in frames {
-            let frame_motors = self.frame_motors(frame)?;
+        let selected = frames
+            .iter()
+            .map(|frame| self.frame_motors(frame))
+            .collect::<Result<Vec<_>, _>>()?;
+        for motor in 0..self.lanes.len() {
+            let incoming: usize = frames
+                .iter()
+                .zip(&selected)
+                .filter(|(_, motors)| motors.contains(&motor))
+                .map(|(frame, _)| frame.spans.len())
+                .sum();
+            let room = self.lanes[motor].pending_cut.as_ref().map_or_else(
+                || self.shim.free_span_slots(motor),
+                |cut| (self.shim.queue_depth() as usize).saturating_sub(cut.held.len()),
+            );
+            if incoming > room {
+                return Err(SendError::Transient(format!(
+                    "stepcompress mcu {mcu_id} motor {motor}: {incoming} views exceed {room} staging slots"
+                )));
+            }
+        }
+        for (frame, frame_motors) in frames.iter().zip(selected) {
             self.credit_unselected_motors(frame, &frame_motors);
             for motor in frame_motors {
                 if let Some(cut) = self.lanes[motor].pending_cut.as_mut() {
@@ -2100,23 +2186,7 @@ impl StepcompressEndpoint {
                 self.push_motor_spans(motor, &frame.spans, frame.axis, clock)?;
             }
         }
-        self.drain_until(clock, clock.lead_horizon(), Retire::Publish)?;
-        match self.flush(clock) {
-            Err(SendError::Transient(error)) => {
-                tracing::warn!(
-                    subsystem = "pump",
-                    event = "egress_backpressure_absorbed",
-                    mcu = self.mcu_id,
-                    backlog = self.backlog.len() as u64,
-                    error = %error,
-                    "egress pushed back after the spans were consumed into the shim - \
-                     the compiled frames stay in the backlog for the pacer; failing the \
-                     bundle would make the pump replay already-consumed spans"
-                );
-                Ok(())
-            }
-            other => other,
-        }
+        Ok(())
     }
 
     /// Queue one run of lane views and carry the exact position the last of

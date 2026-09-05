@@ -4,7 +4,7 @@ use crate::pump::pump_past_guard_secs;
 use host_rt::clock::{Clock, MockClock};
 use host_rt::passthrough_queue::PassthroughRouter;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::time::Duration;
 
 const MCU_ID: u32 = 0;
@@ -48,7 +48,7 @@ fn pump_sink(router: PassthroughRouter) -> PumpSink {
         pump_tx: tx,
         pump_control: None,
         counter: Arc::new(AtomicU64::new(0)),
-        active_drip_cohort: Arc::new(Mutex::new(None)),
+        drip_active: Arc::new(AtomicBool::new(false)),
         motion_history: Arc::new(Mutex::new(crate::motion_history::HistoryStore::default())),
         frontier: Arc::new(super::super::CommittedFrontier::default()),
         frozen_projection: Mutex::new(std::collections::HashMap::new()),

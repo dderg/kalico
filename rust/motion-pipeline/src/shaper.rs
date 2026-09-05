@@ -15,18 +15,22 @@ use crate::lowering::{
 use crate::types::{BaseItem, BaseSegment, Control, PostProcessError, TrajectoryItem};
 
 pub(crate) trait TrackSignal {
-    fn eval(&self, t: f64) -> f64;
-    fn deriv(&self, t: f64) -> f64;
-    fn second_deriv(&self, t: f64) -> f64;
+    fn eval_pva(&self, t: f64) -> (f64, f64, f64);
+    fn eval(&self, t: f64) -> f64 {
+        self.eval_pva(t).0
+    }
+    fn deriv(&self, t: f64) -> f64 {
+        self.eval_pva(t).1
+    }
+    fn second_deriv(&self, t: f64) -> f64 {
+        self.eval_pva(t).2
+    }
     /// The travel between two points the caller has already sampled; a
     /// signal with a better-conditioned delta than the difference of its
     /// samples integrates it from `t0` to `t1` instead.
     fn position_delta(&self, (t0, p0): (f64, f64), (t1, p1): (f64, f64)) -> f64 {
         let _ = (t0, t1);
         p1 - p0
-    }
-    fn eval_pva(&self, t: f64) -> (f64, f64, f64) {
-        (self.eval(t), self.deriv(t), self.second_deriv(t))
     }
     fn acceleration_monotonicity(&self, _start: f64, _end: f64) -> Option<bool> {
         None
@@ -37,16 +41,10 @@ pub(crate) trait TrackSignal {
 }
 
 impl TrackSignal for ContinuousAxis {
-    fn eval(&self, t: f64) -> f64 {
-        ContinuousAxis::eval_pva(self, t).map_or(f64::NAN, |pva| pva.position)
-    }
-
-    fn deriv(&self, t: f64) -> f64 {
-        ContinuousAxis::eval_pva(self, t).map_or(f64::NAN, |pva| pva.velocity)
-    }
-
-    fn second_deriv(&self, t: f64) -> f64 {
-        ContinuousAxis::eval_pva(self, t).map_or(f64::NAN, |pva| pva.acceleration)
+    fn eval_pva(&self, t: f64) -> (f64, f64, f64) {
+        ContinuousAxis::eval_pva(self, t).map_or((f64::NAN, f64::NAN, f64::NAN), |pva| {
+            (pva.position, pva.velocity, pva.acceleration)
+        })
     }
 }
 
@@ -54,18 +52,6 @@ impl<F> TrackSignal for ShapedSignal<'_, F>
 where
     F: Fn(f64) -> f64,
 {
-    fn eval(&self, t: f64) -> f64 {
-        ShapedSignal::eval_pva(self, t).0
-    }
-
-    fn deriv(&self, t: f64) -> f64 {
-        ShapedSignal::eval_pva(self, t).1
-    }
-
-    fn second_deriv(&self, t: f64) -> f64 {
-        ShapedSignal::eval_pva(self, t).2
-    }
-
     fn eval_pva(&self, t: f64) -> (f64, f64, f64) {
         ShapedSignal::eval_pva(self, t)
     }
@@ -125,19 +111,16 @@ pub(crate) const SEGMENT_TIME_EPS_S: f64 = 1e-9;
 #[derive(Default)]
 struct PendingSegments {
     segments: VecDeque<ContinuousSegment>,
-    rests: VecDeque<bool>,
     shaped: VecDeque<ContinuousSegment>,
 }
 
 impl PendingSegments {
-    fn push(&mut self, segment: ContinuousSegment, rest_at_end: bool) {
+    fn push(&mut self, segment: ContinuousSegment) {
         self.segments.push_back(segment);
-        self.rests.push_back(rest_at_end);
     }
 
     fn clear(&mut self) {
         self.segments.clear();
-        self.rests.clear();
         self.shaped.clear();
     }
 
@@ -150,7 +133,9 @@ impl PendingSegments {
     }
 
     fn ends_at_rest(&self) -> bool {
-        self.rests.back() == Some(&true)
+        self.segments
+            .back()
+            .is_some_and(|segment| segment.rest_at_end)
     }
 
     fn back(&self) -> Option<&ContinuousSegment> {
@@ -163,8 +148,6 @@ impl PendingSegments {
 
     fn pop_front(&mut self) -> Option<ContinuousSegment> {
         let segment = self.segments.pop_front();
-        let rest = self.rests.pop_front();
-        assert_eq!(segment.is_some(), rest.is_some());
         if segment.is_some() && !self.shaped.is_empty() {
             self.shaped.pop_front();
         }
@@ -276,8 +259,7 @@ impl Shaper {
                 "",
             );
         }
-        let rest_at_end = segment.rest_at_end;
-        self.pending.push(segment, rest_at_end);
+        self.pending.push(segment);
     }
 
     /// One iteration of [`Shaper::run`]'s loop, for single-threaded hosts
@@ -545,18 +527,8 @@ fn materialize_changed_sources(
         )?;
         if !chains.is_projected_follower(axis) {
             if let Some(chain) = chains.chains.get(axis) {
-                for stage in &chain.stages {
-                    match stage {
-                        ChainStage::SmoothKernel(_) => break,
-                        ChainStage::DerivativeGains { k1, k2 } => {
-                            curve = apply_derivative_gains_to_track(&curve, *k1, *k2);
-                        }
-                        ChainStage::NonlinearAdvance(advance) => {
-                            curve =
-                                apply_nonlinear_advance_to_track(axis, &curve, *advance, fit_tol)?;
-                        }
-                    }
-                }
+                curve =
+                    apply_zero_support_transform(chain.leading_transform(), axis, curve, fit_tol)?;
             }
         }
         replacements.push((axis, ContinuousAxis::Spline(Arc::new(curve))));
@@ -708,17 +680,8 @@ fn apply_motor_side_stages(
             let Some(chain) = chains.chains.get(axis) else {
                 continue;
             };
-            let follower_linear_chain = chains.is_projected_follower(axis)
-                && chain
-                    .stages
-                    .iter()
-                    .any(|stage| matches!(stage, ChainStage::SmoothKernel(_)))
-                && chain.stages.iter().all(|stage| {
-                    matches!(
-                        stage,
-                        ChainStage::DerivativeGains { .. } | ChainStage::SmoothKernel(_)
-                    )
-                });
+            let follower_linear_chain =
+                chains.is_projected_follower(axis) && chain.follower_linear_transform();
             if follower_linear_chain {
                 continue;
             }
@@ -726,16 +689,21 @@ fn apply_motor_side_stages(
                 continue;
             }
             let replacement = match &seg.axes[axis] {
-                ContinuousAxis::Spline(track) => ContinuousAxis::Spline(Arc::new(
-                    apply_trailing_zero_support(chain, axis, (**track).clone(), fit_tol)?,
-                )),
+                ContinuousAxis::Spline(track) => {
+                    ContinuousAxis::Spline(Arc::new(apply_zero_support_transform(
+                        chain.trailing_transform(),
+                        axis,
+                        (**track).clone(),
+                        fit_tol,
+                    )?))
+                }
                 ContinuousAxis::RelativeSpline {
                     base_position,
                     curve,
                 } => ContinuousAxis::RelativeSpline {
                     base_position: *base_position,
-                    curve: Arc::new(apply_trailing_zero_support(
-                        chain,
+                    curve: Arc::new(apply_zero_support_transform(
+                        chain.trailing_transform(),
                         axis,
                         (**curve).clone(),
                         fit_tol,
@@ -769,8 +737,8 @@ fn apply_trailing_stages_to_pieces(
 ) -> Result<Arc<[RelativeSplinePiece]>, PostProcessError> {
     let mut out: Vec<RelativeSplinePiece> = Vec::with_capacity(pieces.len());
     for piece in pieces {
-        let curve = Arc::new(apply_trailing_zero_support(
-            chain,
+        let curve = Arc::new(apply_zero_support_transform(
+            chain.trailing_transform(),
             axis,
             (*piece.curve).clone(),
             fit_tol,
@@ -828,10 +796,7 @@ fn fit_axis_column(
     chain: &CompiledChain,
     fit_tol: FitTol,
 ) -> Result<Option<Vec<nurbs::ScalarNurbs>>, PostProcessError> {
-    let Some(kernel) = chain.stages.iter().find_map(|stage| match stage {
-        ChainStage::SmoothKernel(kernel) => Some(kernel),
-        ChainStage::DerivativeGains { .. } | ChainStage::NonlinearAdvance(_) => None,
-    }) else {
+    let Some(kernel) = chain.kernel() else {
         return Ok(None);
     };
     let (k_lo, k_hi) = kernel.support();
@@ -2636,26 +2601,22 @@ fn exact_value(axis: usize, value: f64, t: f64) -> Result<f64, PostProcessError>
     }
 }
 
-pub(crate) fn apply_trailing_zero_support(
-    chain: &CompiledChain,
+pub(crate) fn apply_zero_support_transform(
+    transform: Option<&ChainStage>,
     axis: usize,
-    mut track: nurbs::ScalarNurbs,
+    track: nurbs::ScalarNurbs,
     fit_tol: FitTol,
 ) -> Result<nurbs::ScalarNurbs, PostProcessError> {
-    let mut seen_kernel = false;
-    for stage in &chain.stages {
-        match stage {
-            ChainStage::SmoothKernel(_) => seen_kernel = true,
-            ChainStage::DerivativeGains { k1, k2 } if seen_kernel => {
-                track = apply_derivative_gains_to_track(&track, *k1, *k2);
-            }
-            ChainStage::NonlinearAdvance(adv) if seen_kernel => {
-                track = apply_nonlinear_advance_to_track(axis, &track, *adv, fit_tol)?;
-            }
-            ChainStage::DerivativeGains { .. } | ChainStage::NonlinearAdvance(_) => {}
+    match transform {
+        Some(ChainStage::DerivativeGains { k1, k2 }) => {
+            Ok(apply_derivative_gains_to_track(&track, *k1, *k2))
         }
+        Some(ChainStage::NonlinearAdvance(advance)) => {
+            apply_nonlinear_advance_to_track(axis, &track, *advance, fit_tol)
+        }
+        Some(ChainStage::SmoothKernel(_)) => unreachable!("zero-support transform is a kernel"),
+        None => Ok(track),
     }
-    Ok(track)
 }
 
 /// `y = x + a(ẋ)` is not polynomial in `x`, so the transformed track is

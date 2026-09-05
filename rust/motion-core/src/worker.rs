@@ -1,5 +1,5 @@
 use crate::lock_ext::LockExt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -181,7 +181,7 @@ pub struct DispatchResources {
     pub anchor: Arc<Mutex<crate::anchor::Anchor>>,
     pub mcu_configs: Vec<crate::mcu_config::McuAxisConfig>,
     pub counter: Arc<AtomicU64>,
-    pub active_drip_cohort: Arc<Mutex<Option<u64>>>,
+    pub drip_active: Arc<AtomicBool>,
     pub motion_history: Arc<Mutex<crate::motion_history::HistoryStore>>,
     pub transports: Arc<crate::axis_transport::AxisTransports>,
 }
@@ -261,7 +261,7 @@ pub fn setup_pipeline(
         pump_tx: pump_data,
         pump_control: Some(pump_control.clone()),
         counter: dispatch.counter,
-        active_drip_cohort: dispatch.active_drip_cohort,
+        drip_active: dispatch.drip_active,
         motion_history: dispatch.motion_history,
         frontier: Arc::clone(&frontier),
         frozen_projection: Mutex::new(std::collections::HashMap::new()),

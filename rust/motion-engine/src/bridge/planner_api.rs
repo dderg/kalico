@@ -358,30 +358,11 @@ impl PyMotionEngine {
         self.planner_config.lock_ok().runtime_caps.jerk_override = jerk;
         Ok(())
     }
-    /// Swap the live pipeline chains between the configured post-processors
-    /// and identity (no shaping). Fails without touching the flag when the
-    /// restored chains no longer compile — the caller must hear that
-    /// shaping did NOT come back.
-    fn set_post_processor_bypass(&self, enabled: bool) -> PyResult<()> {
-        let axis_chains = {
-            let mut cfg = self.planner_config.lock_ok();
-            let previous = cfg.post_processor_bypass;
-            cfg.post_processor_bypass = enabled;
-            let axis_chains = match cfg.compile_active_chains() {
-                Ok(chains) => chains,
-                Err(e) => {
-                    cfg.post_processor_bypass = previous;
-                    return Err(PyValueError::new_err(e.to_string()));
-                }
-            };
-            axis_chains
-        };
-        if let Some(handle) = self.planner.lock_ok().as_ref() {
-            handle
-                .update_axis_chains(axis_chains)
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        }
-        Ok(())
+    pub(super) fn set_post_processor_bypass(&self, enabled: bool) -> PyResult<()> {
+        self.publish_post_processors(|_, bypass| {
+            *bypass = enabled;
+            Ok(())
+        })
     }
     #[pyo3(signature = (corner_deviation))]
     fn set_corner_deviation(&self, corner_deviation: Option<f64>) -> PyResult<()> {
@@ -395,21 +376,8 @@ impl PyMotionEngine {
         self.planner_config.lock_ok().runtime_corner_deviation = corner_deviation;
         Ok(())
     }
-    fn update_post_processor(&self, name: &str, key: &str, value: f64) -> PyResult<()> {
-        let axis_chains = {
-            let mut cfg = self.planner_config.lock_ok();
-            cfg.post_processors
-                .set_param(name, key, value)
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
-            cfg.compile_active_chains()
-                .map_err(|e| PyValueError::new_err(e.to_string()))?
-        };
-        if let Some(handle) = self.planner.lock_ok().as_ref() {
-            handle
-                .update_axis_chains(axis_chains)
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        }
-        Ok(())
+    pub(super) fn update_post_processor(&self, name: &str, key: &str, value: f64) -> PyResult<()> {
+        self.publish_post_processors(|processors, _| processors.set_param(name, key, value))
     }
 
     fn post_processor_param(&self, name: &str, key: &str) -> Option<f64> {
@@ -527,6 +495,30 @@ impl PyMotionEngine {
 }
 
 impl PyMotionEngine {
+    fn publish_post_processors(
+        &self,
+        update: impl FnOnce(
+            &mut config::PostProcessorSet,
+            &mut bool,
+        ) -> Result<(), config::PostProcessorConfigError>,
+    ) -> PyResult<()> {
+        let mut cfg = self.planner_config.lock_ok();
+        let mut processors = cfg.post_processors.clone();
+        let mut bypass = cfg.post_processor_bypass;
+        update(&mut processors, &mut bypass).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let axis_chains = processors
+            .compile_active_chains(&cfg.axis_registry, bypass)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        if let Some(handle) = self.planner.lock_ok().as_ref() {
+            handle
+                .update_axis_chains(axis_chains)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        }
+        cfg.post_processors = processors;
+        cfg.post_processor_bypass = bypass;
+        Ok(())
+    }
+
     /// Re-anchor every serial MCU's step counters at a machine-space rest
     /// position. The MCU-side `runtime_seed_position` also zeroes all
     /// non-spatial motor positions, so this is the counterpart of any

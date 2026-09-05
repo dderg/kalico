@@ -21,8 +21,8 @@ pub use junction::{
 };
 pub use messages::{
     BundleLimits, BuzzLane, BuzzParams, BuzzRoute, BuzzStart, BuzzToken, BuzzTransport, BuzzWave,
-    DrainTick, EnqueueMsg, HeartbeatMsg, HistoryRecorder, PumpCallbacks, PumpMsg, RetiredBy,
-    SendError, SpanSink,
+    CutCredit, DrainTick, EnqueueMsg, HeartbeatMsg, HistoryRecorder, PumpCallbacks, PumpMsg,
+    RetiredBy, SendError, SpanSink,
 };
 #[cfg(test)]
 pub(crate) use pump_loop::pump_past_guard_secs;

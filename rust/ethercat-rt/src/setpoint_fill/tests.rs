@@ -425,12 +425,11 @@ fn conversion_consumes_a_view_and_only_playback_proof_retires_it() {
     let (first_end, second_end) = (first.end_clock, second.end_clock);
     let mut f = filler(1);
     f.push_spans(0, &[first, second]).expect("stage both");
-    assert_eq!(f.take_consumed(0), 0, "staging converts nothing");
+    assert_eq!(f.credit(0), (0, 0), "staging converts nothing");
 
     let runs = f.drain().expect("fill");
     assert_eq!(runs[0].samples.len(), 8);
-    assert_eq!(f.take_consumed(0), 2, "both views were fully converted");
-    assert_eq!(f.take_consumed(0), 0, "consumption is credited once");
+    assert_eq!(f.credit(0), (2, 0), "conversion is not playback");
     assert_eq!(
         f.free_span_slots(0),
         LANE_SPAN_SLOTS,

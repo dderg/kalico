@@ -2,13 +2,17 @@
 
 use super::pump_loop::Pump;
 use super::*;
+use crate::lock_ext::LockExt;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use trajectory::ClockedMotorSpan;
 
-struct NullSink;
+#[derive(Default)]
+struct NullSink {
+    cuts: std::sync::Mutex<Vec<CutCredit>>,
+}
 
 impl SpanSink for NullSink {
     fn send_frame(
@@ -19,6 +23,10 @@ impl SpanSink for NullSink {
         _room: u32,
     ) -> Result<i32, SendError> {
         Ok(mcu_protocol::result_codes::OK)
+    }
+
+    fn cut_staged(&self, _keys: &[AxisKey]) -> Result<Vec<CutCredit>, SendError> {
+        Ok(std::mem::take(&mut *self.cuts.lock_ok()))
     }
 }
 
@@ -34,7 +42,7 @@ fn pump_with_pushed(pushed: u32) -> Pump<NullSink> {
         junctions: JunctionTracker::default(),
         cohort: None,
         halted: BTreeMap::new(),
-        sink: NullSink,
+        sink: NullSink::default(),
         callbacks: PumpCallbacks::noop(64),
         history: None,
         ledger: Arc::new(crate::drain::DrainLedger::new()),
@@ -138,23 +146,106 @@ fn consumption_frees_the_ring_while_only_playback_drains_the_lane() {
 }
 
 #[test]
-fn halt_keeps_pushed_views_until_the_endpoint_publishes_abandonment() {
+fn halt_abandonment_preserves_playback_truth_across_delayed_reports_and_resume() {
     let mut pump = pump_with_pushed(100);
     report(&mut pump, RetiredBy::Pulse, 36);
+    pump.sink.cuts.lock_ok().push(CutCredit {
+        key: DUAL,
+        by: RetiredBy::Pulse,
+        before: (36, 36),
+        after: (100, 100),
+    });
     let (ack, _) = std::sync::mpsc::sync_channel(1);
-
     pump.handle_control_msg(PumpMsg::Halt {
         keys: vec![DUAL],
         ack,
     });
+    pump.publish_ledger();
+    assert!(pump.ledger.drained());
     assert_eq!(pump.queues[&DUAL].pushed, 100);
-
+    assert_eq!(pump.queues[&DUAL].retired, 36);
+    assert_eq!(pump.queues[&DUAL].abandoned, 64);
+    report(&mut pump, RetiredBy::Pulse, 70);
     report(&mut pump, RetiredBy::Pulse, 100);
-    assert!(
-        pump.ledger.drained(),
-        "the endpoint abandonment must close every view retained in the pump odometer: {:?}",
-        pump.ledger.lagging_axes()
+    assert_eq!(
+        pump.queues[&DUAL].retired, 36,
+        "discard and old receipts are not playback"
     );
+    pump.handle_control_msg(PumpMsg::Resume(vec![DUAL]));
+    pump.queues.get_mut(&DUAL).unwrap().pushed += 1;
+    pump.publish_ledger();
+    assert!(!pump.ledger.drained());
+    report(&mut pump, RetiredBy::Pulse, 101);
+    assert!(pump.ledger.drained());
+    assert_eq!(pump.queues[&DUAL].retired, 37);
+    report(&mut pump, RetiredBy::Pulse, 100);
+    assert_eq!(
+        pump.queues[&DUAL].retired, 37,
+        "a delayed cut heartbeat cannot undo resumed playback"
+    );
+    assert_eq!(pump.queues[&DUAL].room(), 64);
+}
+
+#[test]
+fn repeated_cuts_keep_mixed_transport_progress_separate_across_wraparound() {
+    let mut pump = pump_with_pushed(u32::MAX);
+    report_split(&mut pump, RetiredBy::Pulse, u32::MAX - 4, u32::MAX - 6);
+    report_split(&mut pump, RetiredBy::Phase, 2, 1);
+    pump.sink.cuts.lock_ok().push(CutCredit {
+        key: DUAL,
+        by: RetiredBy::Pulse,
+        before: (u32::MAX - 3, u32::MAX - 5),
+        after: (1, 1),
+    });
+    let (ack, _) = std::sync::mpsc::sync_channel(1);
+    pump.handle_control_msg(PumpMsg::Halt {
+        keys: vec![DUAL],
+        ack,
+    });
+    pump.publish_ledger();
+    assert!(pump.ledger.drained());
+    assert_eq!(pump.queues[&DUAL].abandoned, 4);
+    assert_eq!(pump.queues[&DUAL].room(), 64);
+
+    pump.handle_control_msg(PumpMsg::Resume(vec![DUAL]));
+    pump.queues.get_mut(&DUAL).unwrap().pushed = 3;
+    report_split(&mut pump, RetiredBy::Pulse, u32::MAX, u32::MAX);
+    assert_eq!(pump.queues[&DUAL].room(), 60);
+    assert_eq!(pump.queues[&DUAL].outstanding(), 4);
+    report_split(&mut pump, RetiredBy::Pulse, 3, 2);
+    assert_eq!(pump.queues[&DUAL].room(), 62);
+    assert_eq!(pump.queues[&DUAL].outstanding(), 3);
+    report_split(&mut pump, RetiredBy::Phase, 4, 3);
+    assert_eq!(pump.queues[&DUAL].room(), 64);
+    assert!(!pump.ledger.drained());
+
+    pump.sink.cuts.lock_ok().push(CutCredit {
+        key: DUAL,
+        by: RetiredBy::Pulse,
+        before: (3, 2),
+        after: (5, 5),
+    });
+    let (ack, _) = std::sync::mpsc::sync_channel(1);
+    pump.handle_control_msg(PumpMsg::Halt {
+        keys: vec![DUAL],
+        ack,
+    });
+    pump.publish_ledger();
+    assert!(pump.ledger.drained());
+    assert_eq!(pump.queues[&DUAL].abandoned, 5);
+    assert_eq!(pump.queues[&DUAL].retired, u32::MAX - 1);
+
+    pump.handle_control_msg(PumpMsg::Resume(vec![DUAL]));
+    pump.queues.get_mut(&DUAL).unwrap().pushed = 5;
+    report_split(&mut pump, RetiredBy::Pulse, 3, 2);
+    assert_eq!(pump.queues[&DUAL].room(), 62);
+    assert_eq!(pump.queues[&DUAL].outstanding(), 2);
+    report_split(&mut pump, RetiredBy::Pulse, 6, 6);
+    assert_eq!(pump.queues[&DUAL].outstanding(), 1);
+    report_split(&mut pump, RetiredBy::Pulse, 7, 7);
+    assert!(pump.ledger.drained());
+    assert_eq!(pump.queues[&DUAL].retired, 0);
+    assert_eq!(pump.queues[&DUAL].room(), 64);
 }
 
 #[test]

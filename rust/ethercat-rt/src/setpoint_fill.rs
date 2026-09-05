@@ -19,6 +19,7 @@
 //! is retirement. A cut abandons whatever is unresolved and credits neither.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use mcu_protocol::messages::{LaneRun, SetpointSample, LANE_RUN_FLAG_REANCHOR, LANE_RUN_FLAG_TAIL};
 use trajectory::ClockedMotorSpan;
@@ -114,7 +115,8 @@ struct Lane {
     successor: Option<ClockedMotorSpan>,
     /// Converted views the endpoint has not yet proven it played.
     released: VecDeque<ClockedMotorSpan>,
-    consumed: usize,
+    consumed: u32,
+    retired: u32,
     /// Host mm that `pos_counts == 0` stands for in the current epoch. An
     /// epoch starts at every re-anchor and never shifts inside one.
     origin_mm: Option<f64>,
@@ -130,6 +132,7 @@ impl Lane {
             successor: None,
             released: VecDeque::new(),
             consumed: 0,
+            retired: 0,
             origin_mm: None,
             next_index: None,
         }
@@ -184,7 +187,7 @@ impl Lane {
         {
             let span = self.active.take().expect("checked above");
             self.released.push_back(span);
-            self.consumed += 1;
+            self.consumed = self.consumed.wrapping_add(1);
             self.active = self.successor.take();
         }
     }
@@ -237,6 +240,7 @@ impl Lane {
         {
             self.released.pop_front();
             retired += 1;
+            self.retired = self.retired.wrapping_add(1);
         }
         retired
     }
@@ -283,6 +287,7 @@ pub struct ChainFiller {
     vel_drive: Vec<f32>,
     buzz_slots: Vec<bool>,
     runs: Vec<Option<LaneRun>>,
+    pending_output: Option<Arc<mcu_protocol::messages::PushSampleRuns>>,
     closed: Vec<bool>,
 }
 
@@ -328,6 +333,7 @@ impl ChainFiller {
             acc_drive: vec![0.0; n],
             vel_drive: vec![0.0; n],
             runs: vec![None; n],
+            pending_output: None,
             closed: vec![false; n],
         }
     }
@@ -366,6 +372,15 @@ impl ChainFiller {
     /// resumes the lane must carry the re-anchor flag. Returns the abandoned
     /// view count; none of them are retired.
     pub fn cut_axis(&mut self, axis: u8) -> usize {
+        if let Some(output) = &mut self.pending_output {
+            if output.lanes.iter().all(|run| run.axis_idx == axis) {
+                self.pending_output = None;
+            } else if output.lanes.iter().any(|run| run.axis_idx == axis) {
+                Arc::make_mut(output)
+                    .lanes
+                    .retain(|run| run.axis_idx != axis);
+            }
+        }
         self.lanes
             .iter_mut()
             .filter(|l| l.spec.axis == axis)
@@ -397,19 +412,25 @@ impl ChainFiller {
             .unwrap_or(0)
     }
 
-    /// Views fully converted into `LaneRun` samples and released from the
-    /// active cursor since the last call.
-    pub fn take_consumed(&mut self, axis: u8) -> usize {
-        self.lanes
-            .iter_mut()
-            .filter(|l| l.spec.axis == axis)
-            .map(|lane| std::mem::take(&mut lane.consumed))
-            .sum()
+    pub fn credit(&self, axis: u8) -> (u32, u32) {
+        let lanes = self.lanes.iter().filter(|lane| lane.spec.axis == axis);
+        let consumed = lanes.clone().map(|lane| lane.consumed).min().unwrap_or(0);
+        let retired = lanes.map(|lane| lane.retired).min().unwrap_or(0);
+        (consumed, retired)
     }
 
     /// Drop every released view the endpoint has proven it played past,
     /// reclaiming the host's `Arc` on each signal.
     pub fn retire_through(&mut self, axis: u8, played_clock: u64) -> usize {
+        let pending_start = self.pending_output.as_ref().and_then(|output| {
+            output
+                .lanes
+                .iter()
+                .filter(|run| run.axis_idx == axis)
+                .filter_map(|run| self.clock_of(run.start_index))
+                .min()
+        });
+        let played_clock = pending_start.map_or(played_clock, |start| played_clock.min(start));
         self.lanes
             .iter_mut()
             .filter(|l| l.spec.axis == axis)
@@ -442,7 +463,7 @@ impl ChainFiller {
         if self.buzz.active() {
             return crate::buzz::ERR_BUZZ_BUSY;
         }
-        if self.lanes.iter().any(Lane::has_pending) {
+        if self.pending_output.is_some() || self.lanes.iter().any(Lane::has_pending) {
             return crate::buzz::ERR_BUZZ_STREAMING;
         }
         let driven: Vec<bool> = (0..self.lanes.len())
@@ -497,7 +518,9 @@ impl ChainFiller {
     /// keep draining, since a buzz outlives one frame's worth of cycles.
     #[must_use]
     pub fn wants_drain(&self) -> bool {
-        self.buzz.active() || self.lanes.iter().any(Lane::has_pending)
+        self.pending_output.is_some()
+            || self.buzz.active()
+            || self.lanes.iter().any(Lane::has_pending)
     }
 
     /// Nothing the endpoint can still play is outstanding: no view is staged,
@@ -550,6 +573,7 @@ impl ChainFiller {
     /// lane must re-anchor. The Stop / homing-trip / drive-fault path.
     /// Nothing abandoned here is credited as retired.
     pub fn reset(&mut self) -> usize {
+        self.pending_output = None;
         let abandoned = self.lanes.iter_mut().map(Lane::abandon).sum();
         self.buzz.clear();
         self.buzz_next_index = None;
@@ -574,6 +598,10 @@ impl ChainFiller {
     /// per lane. A lane whose coverage ends inside the window closes there;
     /// the run that resumes it carries the re-anchor flag.
     pub fn drain(&mut self) -> Result<Vec<LaneRun>, FillError> {
+        assert!(
+            self.pending_output.is_none(),
+            "pending EtherCAT output must be acknowledged before draining"
+        );
         let Some(start) = self.window_start() else {
             return Ok(Vec::new());
         };
@@ -607,6 +635,34 @@ impl ChainFiller {
             self.close_buzz_epoch();
         }
         Ok(self.runs.iter_mut().filter_map(Option::take).collect())
+    }
+
+    pub fn pending_sample_runs(
+        &mut self,
+    ) -> Result<Option<Arc<mcu_protocol::messages::PushSampleRuns>>, FillError> {
+        if self.pending_output.is_none() {
+            let lanes = self.drain()?;
+            if !lanes.is_empty() {
+                self.pending_output =
+                    Some(Arc::new(mcu_protocol::messages::PushSampleRuns { lanes }));
+            }
+        }
+        Ok(self.pending_output.clone())
+    }
+
+    pub fn acknowledge_sample_runs(
+        &mut self,
+        output: &Arc<mcu_protocol::messages::PushSampleRuns>,
+    ) -> bool {
+        if !self
+            .pending_output
+            .as_ref()
+            .is_some_and(|pending| Arc::ptr_eq(pending, output))
+        {
+            return false;
+        }
+        self.pending_output = None;
+        true
     }
 
     /// A finished buzz ends its epoch: the trajectory that follows anchors

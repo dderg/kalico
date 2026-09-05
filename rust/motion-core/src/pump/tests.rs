@@ -1038,16 +1038,9 @@ fn halt_drops_queued_and_new_spans_until_resume() {
     assert_eq!(pump.queues[&key].spans.len(), 1);
 }
 
-/// A halted axis' motion is discarded on the endpoint, so a transport that
-/// keeps a host-side stage (the setpoint ring) must be told to drop it in the
-/// same breath. The pump owns that hand-off, so it is asserted here rather
-/// than at the sink.
-#[derive(Clone)]
-struct CutRecordingSink {
-    cut: Arc<Mutex<Vec<AxisKey>>>,
-}
+struct CutRejectingSink;
 
-impl SpanSink for CutRecordingSink {
+impl SpanSink for CutRejectingSink {
     fn send_frame(
         &self,
         _key: AxisKey,
@@ -1058,32 +1051,32 @@ impl SpanSink for CutRecordingSink {
         Ok(mcu_protocol::result_codes::OK)
     }
 
-    fn cut_staged(&self, keys: &[AxisKey]) -> Result<(), SendError> {
-        self.cut.lock_ok().extend_from_slice(keys);
-        Ok(())
+    fn cut_staged(&self, _keys: &[AxisKey]) -> Result<Vec<CutCredit>, SendError> {
+        Err(SendError::Transient("cut transport unavailable".into()))
     }
 }
 
 #[test]
-fn halting_an_axis_cuts_the_transport_s_staged_motion() {
+fn rejected_multi_axis_halt_reports_once_and_does_not_acknowledge() {
     let key = AxisKey { mcu_id: 1, axis: 0 };
-    let cut = Arc::new(Mutex::new(Vec::new()));
-    let sink = CutRecordingSink {
-        cut: Arc::clone(&cut),
-    };
-    let mut pump = queue_pump(key, Duration::from_secs(1), |_| {}, sink);
-    let (ack_tx, _ack_rx) = mpsc::sync_channel(1);
+    let sibling = AxisKey { mcu_id: 1, axis: 1 };
+    let mut pump = queue_pump(key, Duration::from_secs(1), |_| {}, CutRejectingSink);
+    let (fatal_tx, fatal_rx) = mpsc::channel();
+    pump.callbacks.on_fatal_transport = Box::new(move |key, _| fatal_tx.send(key).unwrap());
+    let (ack_tx, ack_rx) = mpsc::sync_channel(1);
 
-    pump.handle_control_msg(PumpMsg::Halt {
-        keys: vec![key],
+    assert!(!pump.handle_control_msg(PumpMsg::Halt {
+        keys: vec![key, sibling],
         ack: ack_tx,
-    });
+    }));
 
-    assert_eq!(
-        *cut.lock_ok(),
-        vec![key],
-        "the halted key must reach the sink's stage-cut hook"
-    );
+    assert_eq!(fatal_rx.try_iter().collect::<Vec<_>>(), vec![key]);
+    assert!(matches!(
+        ack_rx.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+    assert_eq!(pump.queues[&key].spans.len(), 1);
+    assert_eq!(pump.queues[&key].abandoned, 0);
 }
 
 #[test]
@@ -1117,6 +1110,69 @@ fn send_rejected_while_halted_discards_bundle_and_infers_halt() {
     ));
     assert!(pump.queues[&key].spans.is_empty());
     assert_eq!(abandoned_rx.recv().unwrap(), (key, 1));
+}
+
+struct OwnershipSink {
+    accepted: Mutex<Vec<u8>>,
+    reject_phase: std::sync::atomic::AtomicBool,
+}
+
+impl SpanSink for OwnershipSink {
+    fn send_frame(
+        &self,
+        key: AxisKey,
+        _spans: &[ClockedMotorSpan],
+        _new_head: u32,
+        _room: u32,
+    ) -> Result<i32, SendError> {
+        if key.axis == 1 && self.reject_phase.load(Ordering::Relaxed) {
+            return Err(SendError::Transient("phase staging full".into()));
+        }
+        self.accepted.lock_ok().push(key.axis);
+        Ok(mcu_protocol::result_codes::OK)
+    }
+
+    fn lane_group(&self, key: AxisKey) -> u8 {
+        key.axis
+    }
+
+    fn progress_mcu(&self, _mcu_id: u32, group: u8) -> Result<(), SendError> {
+        if group == 0 {
+            Err(SendError::Transient(
+                "pulse wire full after acceptance".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn mixed_endpoint_groups_commit_acceptance_not_wire_progress() {
+    let pulse = AxisKey { mcu_id: 1, axis: 0 };
+    let phase = AxisKey { mcu_id: 1, axis: 1 };
+    let sink = OwnershipSink {
+        accepted: Mutex::new(Vec::new()),
+        reject_phase: std::sync::atomic::AtomicBool::new(true),
+    };
+    let mut pump = queue_pump(pulse, Duration::from_secs(1), |_| {}, sink);
+    pump.queues.get_mut(&pulse).unwrap().pushed = 0;
+    let mut phase_queue = AxisQueue::new(1);
+    phase_queue.spans.push_back(make_span(0));
+    pump.queues.insert(phase, phase_queue);
+
+    pump.send_ready().unwrap();
+    assert!(pump.queues[&pulse].spans.is_empty());
+    assert_eq!(pump.queues[&pulse].pushed, 1);
+    assert_eq!(pump.queues[&pulse].retired, 0);
+    pump.send_ready().unwrap();
+    assert_eq!(pump.queues[&phase].spans.len(), 1);
+    assert_eq!(pump.queues[&phase].pushed, 0);
+    pump.sink.reject_phase.store(false, Ordering::Relaxed);
+    pump.send_ready().unwrap();
+    assert!(pump.queues[&phase].spans.is_empty());
+    assert_eq!(pump.queues[&phase].pushed, 1);
+    assert_eq!(*pump.sink.accepted.lock_ok(), vec![0, 1]);
 }
 
 #[test]

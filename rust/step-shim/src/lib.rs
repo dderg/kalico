@@ -635,6 +635,10 @@ impl StepShim {
         self.queue_depth
     }
 
+    pub fn free_span_slots(&self, motor: usize) -> usize {
+        self.queue_depth as usize - self.motors[motor].queue.len()
+    }
+
     pub fn halt_at(
         &mut self,
         motor: usize,

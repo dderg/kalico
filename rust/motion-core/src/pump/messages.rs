@@ -572,6 +572,17 @@ pub enum DrainTick {
     Failed { mcu_id: u32, error: SendError },
 }
 
+/// Absolute endpoint odometers immediately before and after discarding work.
+/// Each pair is `(consumed, retired)`; a discard-induced jump is a new report
+/// floor, not evidence of conversion or playback.
+#[derive(Clone, Copy, Debug)]
+pub struct CutCredit {
+    pub key: AxisKey,
+    pub by: RetiredBy,
+    pub before: (u32, u32),
+    pub after: (u32, u32),
+}
+
 pub trait SpanSink: Send {
     fn send_frame(
         &self,
@@ -614,16 +625,12 @@ pub trait SpanSink: Send {
     /// sanctions a forward-only jump.
     fn mark_seam_gap(&self, _key: AxisKey, _at_start_clock: u64) {}
 
-    /// Deliver every axis frame destined for `mcu_id` as one bundled
-    /// transaction. A whole bundle either lands or it doesn't — the caller
-    /// commits the ring bookkeeping for all axes only on `Ok`, so a failed
-    /// bundle re-sends byte-identical frames to the same ring slots.
-    ///
-    /// The default fans out to per-axis `send_frame`; a transport that can
-    /// pack multiple axes into one round-trip overrides this to collapse the
-    /// per-frame overhead that dominates dense-stream delivery.
+    /// Accept ownership of the bundle exactly once. `Transient` rejects the
+    /// entire bundle before views or motor-selection credits are changed.
+    /// `Ok` is host acceptance, not execution or retirement; subsequent wire
+    /// backpressure belongs to the endpoint and must never replay these views.
     fn send_mcu_frames(&self, mcu_id: u32, frames: &[AxisFrame]) -> Result<(), SendError> {
-        for f in frames {
+        for (index, f) in frames.iter().enumerate() {
             self.send_frame(
                 AxisKey {
                     mcu_id,
@@ -632,26 +639,35 @@ pub trait SpanSink: Send {
                 &f.spans,
                 f.new_head,
                 f.room,
-            )?;
+            )
+            .map_err(|error| match error {
+                SendError::Transient(message) if index != 0 => SendError::Fatal(format!(
+                    "mcu {mcu_id}: endpoint rejected a partially accepted bundle: {message}"
+                )),
+                other => other,
+            })?;
         }
         Ok(())
     }
 
-    fn flush_keys(&self, _keys: &[AxisKey]) -> Result<(), SendError> {
+    /// Progress an accepted endpoint group without transferring ownership again.
+    fn progress_mcu(&self, _mcu_id: u32, _group: u8) -> Result<(), SendError> {
         Ok(())
+    }
+
+    fn flush_keys(&self, _keys: &[AxisKey]) -> Result<Vec<CutCredit>, SendError> {
+        Ok(Vec::new())
     }
 
     /// Drop every named endpoint's accepted and staged motion before the pump
     /// acknowledges a halt. The endpoint must publish abandonment against its
     /// absolute odometers before new motion can resume.
-    fn cut_staged(&self, _keys: &[AxisKey]) -> Result<(), SendError> {
-        Ok(())
+    fn cut_staged(&self, keys: &[AxisKey]) -> Result<Vec<CutCredit>, SendError> {
+        self.flush_keys(keys)
     }
 
-    /// Ship one further window to every endpoint still holding samples the
-    /// pump has not shipped — a host-generated source (a buzz) or trajectory
-    /// left over past one fill window — and report whether any endpoint owes
-    /// another window after that.
+    /// Progress accepted or host-generated EtherCAT output and report whether
+    /// another window remains. A transient failure retains that output.
     fn drain_tick(&self) -> DrainTick {
         DrainTick::Quiet
     }

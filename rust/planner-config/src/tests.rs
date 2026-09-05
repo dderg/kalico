@@ -54,7 +54,12 @@ fn default_config_chains_are_passthrough() {
     let c = PlannerConfig::default();
     let chains = c.post_processors.compile(&c.axis_registry).unwrap();
     assert_eq!(chains.n_axes(), 3);
-    assert!(chains.chains.iter().all(|ch| ch.stages.is_empty()));
+    assert!(
+        chains
+            .chains
+            .iter()
+            .all(trajectory::CompiledChain::is_empty)
+    );
     assert!(chains.followers.is_empty());
 }
 
@@ -328,12 +333,9 @@ fn kernel_and_pa_on_follower_e_compiles() {
     .unwrap();
     let chains = set.compile(&registry).unwrap();
     assert!(
-        matches!(chains.chains[3].stages[0], trajectory::ChainStage::DerivativeGains { k1, k2: 0.0 } if k1 == 0.04)
+        matches!(chains.chains[3].leading_transform(), Some(trajectory::ChainStage::DerivativeGains { k1, k2: 0.0 }) if *k1 == 0.04)
     );
-    assert!(matches!(
-        chains.chains[3].stages[1],
-        trajectory::ChainStage::SmoothKernel(_)
-    ));
+    assert!(chains.chains[3].kernel().is_some());
     assert_eq!(chains.followers, vec![(3, vec![0, 1, 2])]);
 }
 
@@ -421,7 +423,7 @@ fn happy_path_compiles_pa_on_follower_e() {
     let chains = set.compile(&registry).unwrap();
     assert_eq!(chains.n_axes(), 4);
     assert!(
-        matches!(chains.chains[3].stages[0], trajectory::ChainStage::DerivativeGains { k1, k2: 0.0 } if k1 == 0.04)
+        matches!(chains.chains[3].transform(), Some(trajectory::ChainStage::DerivativeGains { k1, k2: 0.0 }) if *k1 == 0.04)
     );
     assert_eq!(chains.followers, vec![(3, vec![0, 1, 2])]);
 }
@@ -437,7 +439,7 @@ fn set_param_updates_named_instance_and_recompile_reflects_it() {
     set.set_param("pa", "k", 0.07).unwrap();
     let chains = set.compile(&registry).unwrap();
     assert!(
-        matches!(chains.chains[3].stages[0], trajectory::ChainStage::DerivativeGains { k1, k2: 0.0 } if k1 == 0.07)
+        matches!(chains.chains[3].transform(), Some(trajectory::ChainStage::DerivativeGains { k1, k2: 0.0 }) if *k1 == 0.07)
     );
     assert!(set.set_param("nope", "k", 1.0).is_err());
     assert!(set.set_param("pa", "frequency_hz", 1.0).is_err());
@@ -460,14 +462,11 @@ fn mode_inverse_after_kernel_compiles_into_the_axis_chain() {
     .unwrap();
     let chains = set.compile(&registry).unwrap();
     let omega = 2.0 * std::f64::consts::PI * 131.0;
+    assert!(chains.chains[3].kernel().is_some());
     assert!(matches!(
-        chains.chains[3].stages[0],
-        trajectory::ChainStage::SmoothKernel(_)
-    ));
-    assert!(matches!(
-        chains.chains[3].stages[1],
-        trajectory::ChainStage::DerivativeGains { k1, k2 }
-            if k1 == 2.0 * 0.05 / omega && k2 == 1.0 / (omega * omega)
+        chains.chains[3].trailing_transform(),
+        Some(trajectory::ChainStage::DerivativeGains { k1, k2 })
+            if *k1 == 2.0 * 0.05 / omega && *k2 == 1.0 / (omega * omega)
     ));
 }
 

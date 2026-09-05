@@ -1,6 +1,6 @@
 use super::messages::RetiredBy;
 use super::{AxisKey, MAX_LEAD_SECS};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use trajectory::{
     ClockedMotorSpan, ContinuousAxis, MAX_SPAN_SECS, MotorGroup, MotorSpan, MotorTerm,
@@ -11,18 +11,19 @@ use trajectory::{
 struct WireCredit {
     consumed: u32,
     retired: u32,
+    has_cut: bool,
 }
 
 #[derive(Debug)]
 pub struct AxisQueue {
     pub spans: VecDeque<ClockedMotorSpan>,
     pub pushed: u32,
-    /// `consumed` and `retired` are the axis totals: the sum of `credits`,
-    /// recomputed on every report. `pushed` counts the views the pump handed
-    /// to whichever transport owned the axis at the time, so only the sum of
-    /// every transport's credit is comparable with it.
+    /// Logical totals exclude raw endpoint odometer jumps caused by cuts.
+    /// Discarded views are tracked separately from conversion and playback.
     pub consumed: u32,
     pub retired: u32,
+    pub abandoned_unconsumed: u32,
+    pub abandoned: u32,
     credits: [WireCredit; RetiredBy::COUNT],
     pub ring_depth: u32,
     pub lead_secs: f64,
@@ -74,6 +75,8 @@ impl AxisQueue {
             pushed: 0,
             consumed: 0,
             retired: 0,
+            abandoned_unconsumed: 0,
+            abandoned: 0,
             ring_depth,
             lead_secs: MAX_LEAD_SECS,
             staged_motion: 0,
@@ -85,21 +88,53 @@ impl AxisQueue {
         }
     }
 
-    /// Record one transport's absolute odometers for this axis and refresh the
-    /// axis totals.
+    /// Add progress since this transport's last report, excluding cut jumps.
     pub fn credit(&mut self, by: RetiredBy, consumed: u32, retired: u32) {
-        self.credits[by as usize] = WireCredit { consumed, retired };
-        self.consumed = self
-            .credits
-            .iter()
-            .fold(0, |sum, c| sum.wrapping_add(c.consumed));
-        self.retired = self
-            .credits
-            .iter()
-            .fold(0, |sum, c| sum.wrapping_add(c.retired));
+        let credit = &mut self.credits[by as usize];
+        let consumed_delta = consumed.wrapping_sub(credit.consumed);
+        if !credit.has_cut || consumed_delta <= u32::MAX / 2 {
+            self.consumed = self.consumed.wrapping_add(consumed_delta);
+            credit.consumed = consumed;
+        }
+        let retired_delta = retired.wrapping_sub(credit.retired);
+        if !credit.has_cut || retired_delta <= u32::MAX / 2 {
+            self.retired = self.retired.wrapping_add(retired_delta);
+            credit.retired = retired;
+        }
+    }
+
+    pub fn credit_cut(&mut self, cut: super::CutCredit) {
+        self.credit(cut.by, cut.before.0, cut.before.1);
+        let credit = &mut self.credits[cut.by as usize];
+        credit.consumed = credit
+            .consumed
+            .wrapping_add(cut.after.0.wrapping_sub(cut.before.0));
+        credit.retired = credit
+            .retired
+            .wrapping_add(cut.after.1.wrapping_sub(cut.before.1));
+        credit.has_cut = true;
+    }
+
+    pub fn abandon_accepted(&mut self) -> u32 {
+        let abandoned = self.outstanding();
+        self.abandoned = self.abandoned.wrapping_add(abandoned);
+        self.abandoned_unconsumed = self.pushed.wrapping_sub(self.consumed);
+        abandoned
+    }
+
+    pub fn awaiting_consumption(&self) -> u32 {
+        self.pushed
+            .wrapping_sub(self.consumed)
+            .wrapping_sub(self.abandoned_unconsumed)
+    }
+
+    pub fn outstanding(&self) -> u32 {
+        self.pushed
+            .wrapping_sub(self.retired)
+            .wrapping_sub(self.abandoned)
     }
     pub fn room(&self) -> u32 {
-        let in_flight = self.pushed.wrapping_sub(self.consumed);
+        let in_flight = self.awaiting_consumption();
         if in_flight > self.ring_depth {
             self.ring_depth
         } else {
@@ -331,7 +366,6 @@ pub fn schedule(
     let mut head: Option<Candidate> = None;
     let mut full: Option<Candidate> = None;
     let mut holding = false;
-    let mut blocked: BTreeSet<AxisKey> = BTreeSet::new();
 
     for (&key, q) in queues {
         let Some(span) = q.spans.front() else {
@@ -343,14 +377,8 @@ pub fn schedule(
         };
         match plan.verdict(&key, q, span.start_clock, 0, usize::MAX) {
             Verdict::Ready => keep_earliest(&mut head, candidate),
-            Verdict::NoRoom => {
-                keep_earliest(&mut full, candidate);
-                blocked.insert(key);
-            }
-            Verdict::Held => {
-                holding = true;
-                blocked.insert(key);
-            }
+            Verdict::NoRoom => keep_earliest(&mut full, candidate),
+            Verdict::Held => holding = true,
         }
     }
 
@@ -367,40 +395,27 @@ pub fn schedule(
         max_per_frame > 0,
         "a transport admitting no view per frame could never ship the head lane"
     );
-    let mut taken: BTreeMap<AxisKey, usize> = BTreeMap::new();
-    let mut maxed: BTreeSet<AxisKey> = blocked;
-    loop {
-        let next = queues
+    let mut frames = Vec::new();
+    for (&key, q) in queues {
+        if key.mcu_id != head.key.mcu_id {
+            continue;
+        }
+        let spans: Vec<_> = q
+            .spans
             .iter()
-            .filter_map(|(k, q)| {
-                if k.mcu_id != head.key.mcu_id || maxed.contains(k) {
-                    return None;
-                }
-                let already = taken.get(k).copied().unwrap_or(0);
-                q.spans
-                    .get(already)
-                    .map(|span| (*k, span.start_clock, span.start_host))
+            .enumerate()
+            .take_while(|(already, span)| {
+                matches!(
+                    plan.verdict(&key, q, span.start_clock, *already, max_per_frame),
+                    Verdict::Ready
+                )
             })
-            .min_by(|(ka, _, ha), (kb, _, hb)| ha.total_cmp(hb).then(ka.cmp(kb)));
-        let Some((k, start_clock, _)) = next else {
-            break;
-        };
-        let already = taken.get(&k).copied().unwrap_or(0);
-        match plan.verdict(&k, &queues[&k], start_clock, already, max_per_frame) {
-            Verdict::Ready => *taken.entry(k).or_insert(0) += 1,
-            Verdict::NoRoom | Verdict::Held => {
-                maxed.insert(k);
-            }
+            .map(|(_, span)| span.clone())
+            .collect();
+        if !spans.is_empty() {
+            frames.push(FramePlan { key, spans });
         }
     }
-
-    let frames: Vec<FramePlan> = taken
-        .into_iter()
-        .map(|(k, n)| FramePlan {
-            key: k,
-            spans: queues[&k].spans.iter().take(n).cloned().collect(),
-        })
-        .collect();
     assert!(
         !frames.is_empty(),
         "the head lane cleared room, cap and horizon, so the frame pass must take at least one \

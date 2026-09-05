@@ -604,6 +604,7 @@ const SCHEMA_MESSAGES: &[SchemaMessage] = &[
             SchemaField { name: "motor", ty: "u8" },
             SchemaField { name: "stepper", ty: "u8" },
             SchemaField { name: "engage", ty: "u8" },
+            SchemaField { name: "stepper_oid", ty: "u8" },
         ],
     },
     SchemaMessage {

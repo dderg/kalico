@@ -4,7 +4,7 @@
 use crate::lock_ext::LockExt;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::Sender;
@@ -26,7 +26,7 @@ pub(crate) struct PumpSink {
     pub(crate) pump_tx: Sender<crate::pump::EnqueueMsg>,
     pub(crate) pump_control: Option<Sender<crate::pump::PumpMsg>>,
     pub(crate) counter: Arc<AtomicU64>,
-    pub(crate) active_drip_cohort: Arc<Mutex<Option<u64>>>,
+    pub(crate) drip_active: Arc<AtomicBool>,
     pub(crate) motion_history: Arc<Mutex<crate::motion_history::HistoryStore>>,
     pub(crate) frontier: Arc<CommittedFrontier>,
     pub(crate) frozen_projection: Mutex<std::collections::HashMap<u32, FrozenProjection>>,
@@ -373,7 +373,7 @@ impl PumpSink {
             .anchor
             .lock_ok()
             .anchor_segment(t_start, t_end, host_now);
-        let drip_active = self.active_drip_cohort.lock_ok().is_some();
+        let drip_active = self.drip_active.load(Ordering::Acquire);
         AnchorPoint {
             t0,
             epoch,

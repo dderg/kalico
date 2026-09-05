@@ -766,9 +766,9 @@ fn smooth_shaper_output_matches_shaped_signal_oracle() {
     let shaped = &shaped[1..shaped.len() - 1];
 
     let oracle_chains = smooth_x_chains(0.044583333333333336);
-    let trajectory::ChainStage::SmoothKernel(kernel) = &oracle_chains.chains[0].stages[0] else {
-        panic!("expected smooth kernel");
-    };
+    let kernel = oracle_chains.chains[0]
+        .kernel()
+        .expect("expected smooth kernel");
     let first = base.first().unwrap().t_start;
     let last = base.last().unwrap().t_end;
     let input_degree = base
@@ -2796,14 +2796,13 @@ struct SineTrackSignal {
 }
 
 impl crate::shaper::TrackSignal for SineTrackSignal {
-    fn eval(&self, t: f64) -> f64 {
-        self.amplitude * libm::sin(self.omega * t)
-    }
-    fn deriv(&self, t: f64) -> f64 {
-        self.amplitude * self.omega * libm::cos(self.omega * t)
-    }
-    fn second_deriv(&self, t: f64) -> f64 {
-        -self.amplitude * self.omega * self.omega * libm::sin(self.omega * t)
+    fn eval_pva(&self, t: f64) -> (f64, f64, f64) {
+        let sin = libm::sin(self.omega * t);
+        (
+            self.amplitude * sin,
+            self.amplitude * self.omega * libm::cos(self.omega * t),
+            -self.amplitude * self.omega * self.omega * sin,
+        )
     }
 }
 
@@ -2935,16 +2934,17 @@ fn extruder_gain_kernel_chains(
     k2: f64,
     e_smooth_time: f64,
 ) -> AxisChainSet {
-    let kernel = e_chain(None, e_smooth_time).stages[0].clone();
+    let kernel = e_chain(None, e_smooth_time).kernel().cloned();
     let gain = trajectory::ChainStage::DerivativeGains { k1, k2 };
-    let stages = if gain_first {
-        vec![gain, kernel]
+    let placement = if gain_first {
+        trajectory::chain::TransformPlacement::BeforeKernel
     } else {
-        vec![kernel, gain]
+        trajectory::chain::TransformPlacement::AfterKernel
     };
     let mut chains =
         leader_smooth_time.map_or_else(follower_chains_without_kernels, xy_shaper_follower_chains);
-    chains.chains[3] = trajectory::CompiledChain { stages };
+    chains.chains[3] =
+        trajectory::CompiledChain::from_kernel_and_transform(kernel, Some((placement, gain)));
     chains
 }
 

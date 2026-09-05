@@ -11,8 +11,7 @@ use trajectory::{
 use crate::lowering::{FitTol, follower_tol_scale};
 use crate::shaper::{
     AxisSignalTable, SEGMENT_TIME_EPS_S, ShiftedTrackSignal, TrackSignal, analytic_phase_boundary,
-    apply_derivative_gains_to_track, apply_nonlinear_advance_to_track, fit_axis_from_signal,
-    shaped_signal_breakpoints,
+    apply_derivative_gains_to_track, fit_axis_from_signal, shaped_signal_breakpoints,
 };
 use crate::types::PostProcessError;
 
@@ -179,21 +178,11 @@ pub(crate) fn project_followers(
     }
     for (axis, leaders) in chains.projected_followers() {
         let chain = &chains.chains[axis];
-        let kernel = chain.stages.iter().find_map(|stage| match stage {
-            ChainStage::SmoothKernel(kernel) => Some(kernel),
-            ChainStage::DerivativeGains { .. } | ChainStage::NonlinearAdvance(_) => None,
-        });
-        let defer_linear_prefix = kernel.is_some()
-            && chain.stages.iter().all(|stage| {
-                matches!(
-                    stage,
-                    ChainStage::DerivativeGains { .. } | ChainStage::SmoothKernel(_)
-                )
-            });
+        let kernel = chain.kernel();
+        let defer_linear_prefix = chain.follower_linear_transform();
         let leading_stage = (!defer_linear_prefix)
-            .then(|| chain.stages.first())
-            .flatten()
-            .filter(|stage| !matches!(stage, ChainStage::SmoothKernel(_)));
+            .then(|| chain.leading_transform())
+            .flatten();
         let leaders_transformed = leaders.iter().any(|&leader| {
             chains
                 .chains
@@ -496,17 +485,11 @@ pub(crate) fn project_followers(
                 }
                 kernel_input = bezier_pieces_to_nurbs(&input_pieces);
                 batch_base += input_offset;
-                let mut gained_input = chain
-                    .stages
-                    .iter()
-                    .take_while(|stage| !matches!(stage, ChainStage::SmoothKernel(_)))
-                    .any(|stage| !matches!(stage, ChainStage::SmoothKernel(_)));
+                let mut gained_input = chain.leading_transform().is_some();
                 if defer_linear_prefix {
-                    for stage in &chain.stages {
-                        if let ChainStage::DerivativeGains { k1, k2 } = stage {
-                            kernel_input = apply_derivative_gains_to_track(&kernel_input, *k1, *k2);
-                            gained_input = true;
-                        }
+                    if let Some(ChainStage::DerivativeGains { k1, k2 }) = chain.transform() {
+                        kernel_input = apply_derivative_gains_to_track(&kernel_input, *k1, *k2);
+                        gained_input = true;
                     }
                 }
                 let gained_pieces = extract_bezier_pieces(&kernel_input);
@@ -824,25 +807,12 @@ fn pvaj_of_track(track: &ScalarNurbs, t: f64) -> Pvaj4 {
 /// acceleration jumping across the seam) apart from the pipeline's fit
 /// residual (which lives in `v` and stays welded).
 fn chain_output_velocity(chain: &CompiledChain, v: f64, a: f64, j: f64) -> f64 {
-    let (mut v, mut a, j) = (v, a, j);
-    for stage in &chain.stages {
-        match stage {
-            ChainStage::SmoothKernel(_) => break,
-            ChainStage::DerivativeGains { k1, k2 } => {
-                let (nv, na) = (v + k1 * a + k2 * j, a + k1 * j);
-                (v, a) = (nv, na);
-            }
-            ChainStage::NonlinearAdvance(adv) => {
-                let (nv, na) = (
-                    v + adv.slope(v) * a,
-                    adv.curvature(v) * a * a + adv.slope(v) * j + a,
-                );
-                (v, a) = (nv, na);
-            }
-        }
+    match chain.leading_transform() {
+        Some(ChainStage::DerivativeGains { k1, k2 }) => v + k1 * a + k2 * j,
+        Some(ChainStage::NonlinearAdvance(advance)) => v + advance.slope(v) * a,
+        Some(ChainStage::SmoothKernel(_)) => unreachable!("zero-support transform is a kernel"),
+        None => v,
     }
-    let _ = (a, j);
-    v
 }
 
 /// The chain stages ahead of the follower's kernel (all of them when it has
@@ -851,24 +821,16 @@ fn chain_output_velocity(chain: &CompiledChain, v: f64, a: f64, j: f64) -> f64 {
 fn apply_leading_stages(
     chain: &CompiledChain,
     axis: usize,
-    mut track: ScalarNurbs,
+    track: ScalarNurbs,
     fit_tol: FitTol,
     defer_linear_prefix: bool,
 ) -> Result<ScalarNurbs, PostProcessError> {
-    for stage in &chain.stages {
-        match stage {
-            ChainStage::SmoothKernel(_) => break,
-            ChainStage::DerivativeGains { k1, k2 } => {
-                if !defer_linear_prefix {
-                    track = apply_derivative_gains_to_track(&track, *k1, *k2);
-                }
-            }
-            ChainStage::NonlinearAdvance(adv) => {
-                track = apply_nonlinear_advance_to_track(axis, &track, *adv, fit_tol)?;
-            }
-        }
-    }
-    Ok(track)
+    let transform = if defer_linear_prefix {
+        None
+    } else {
+        chain.leading_transform()
+    };
+    crate::shaper::apply_zero_support_transform(transform, axis, track, fit_tol)
 }
 
 /// The convolution-relevant cuts of a projected follower source, split by
@@ -1247,18 +1209,6 @@ struct AxisSignal<'a> {
 }
 
 impl TrackSignal for AxisSignal<'_> {
-    fn eval(&self, t: f64) -> f64 {
-        axis_pva(self.axis, t).0 - self.base
-    }
-
-    fn deriv(&self, t: f64) -> f64 {
-        axis_pva(self.axis, t).1
-    }
-
-    fn second_deriv(&self, t: f64) -> f64 {
-        axis_pva(self.axis, t).2
-    }
-
     fn eval_pva(&self, t: f64) -> (f64, f64, f64) {
         let (position, velocity, acceleration) = axis_pva(self.axis, t);
         (position - self.base, velocity, acceleration)
@@ -2009,18 +1959,6 @@ struct AdvancedFollowerSignal<'a, 'b> {
 }
 
 impl TrackSignal for AdvancedFollowerSignal<'_, '_> {
-    fn eval(&self, t: f64) -> f64 {
-        self.eval_pva(t).0
-    }
-
-    fn deriv(&self, t: f64) -> f64 {
-        self.eval_pva(t).1
-    }
-
-    fn second_deriv(&self, t: f64) -> f64 {
-        self.eval_pva(t).2
-    }
-
     fn eval_pva(&self, t: f64) -> (f64, f64, f64) {
         let (p, v, a) = self.source.eval_pva(t);
         let j = self.source.jerk(t);

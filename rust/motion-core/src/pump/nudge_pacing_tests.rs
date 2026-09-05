@@ -273,17 +273,19 @@ fn worst_step_load_late(frames: &[StepFrame]) -> i64 {
 
 impl Bench {
     fn push(&mut self, spans: Vec<ClockedMotorSpan>) -> Result<(), SendError> {
-        self.endpoint.send_frames(
-            MCU_ID,
-            &[AxisFrame {
-                axis: AXIS,
-                spans,
-                new_head: 0,
-                room: SHIM_RING_DEPTH,
-                guard_recorded_ns: 0,
-                guard_mcu_clock: 0,
-            }],
-        )
+        self.endpoint
+            .send_frames(
+                MCU_ID,
+                &[AxisFrame {
+                    axis: AXIS,
+                    spans,
+                    new_head: 0,
+                    room: SHIM_RING_DEPTH,
+                    guard_recorded_ns: 0,
+                    guard_mcu_clock: 0,
+                }],
+            )
+            .and_then(|()| self.endpoint.tick())
     }
 
     fn advance_to(&mut self, clock: u64) -> Result<(), SendError> {

@@ -16,11 +16,11 @@ fn escalate_endpoint_death(latch: &Arc<Mutex<HashMap<u32, String>>>, mcu_id: u32
 fn log_abandoned_spans(key: crate::types::AxisKey, dropped: u32) {
     tracing::warn!(
         subsystem = "motion",
-        event = "pump_abandon_unpushed",
+        event = "pump_abandon",
         mcu = key.mcu_id,
         axis = key.axis,
         dropped,
-        "pump dropped staged spans that never reached the wire — motion was lost"
+        "pump abandoned unresolved staged or endpoint-accepted spans"
     );
 }
 
@@ -519,14 +519,13 @@ impl PyMotionEngine {
             anchor: anchor_mutex,
             mcu_configs: mcu_configs.to_vec(),
             counter: Arc::clone(&counter),
-            active_drip_cohort: Arc::clone(&self.homing.active_drip_cohort),
+            drip_active: Arc::clone(&self.homing.drip_active),
             motion_history: Arc::clone(&self.motion_history),
         };
 
         let stream_cfg = build_stream_config(cfg)?;
         let axis_chains = cfg
-            .post_processors
-            .compile(&cfg.axis_registry)
+            .compile_active_chains()
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         let home = vec![0.0; cfg.axis_registry.n_axes()];
 
@@ -654,12 +653,22 @@ impl PyMotionEngine {
                 .expect("ec_conns built from ethercat_mcu_ids")
                 .clone();
 
-            let slot_axes = self
+            let (slot_axes, filler) = self
                 .mcus
                 .lock_ok()
                 .get(&mcu_id)
-                .map(|c| c.ethercat_slot_axes.clone())
-                .unwrap_or_default();
+                .map(|connection| {
+                    (
+                        connection.ethercat_slot_axes.clone(),
+                        Arc::clone(
+                            connection
+                                .ring_filler
+                                .as_ref()
+                                .expect("EtherCAT endpoint has a ring filler"),
+                        ),
+                    )
+                })
+                .expect("EtherCAT endpoint is registered");
             let supervisor = EthercatHeartbeatSupervisor {
                 mcu_id,
                 mcu_label: self.mcu_label(mcu_id),
@@ -667,6 +676,7 @@ impl PyMotionEngine {
                 latched_drive_fault: Arc::clone(&self.latched.drive),
                 pump_tx: pump_control.clone(),
                 slot_axes,
+                filler,
             };
             conn.attach_heartbeat_callback(Arc::new(
                 move |hb: &mcu_protocol::messages::StatusHeartbeat| supervisor.on_heartbeat(hb),
@@ -703,39 +713,56 @@ impl PyMotionEngine {
     }
 }
 
-/// Re-index an EtherCAT endpoint's per-SLOT retired counters into the pump's
-/// per-AXIS view. With AWD several slots retire the same axis's spans; the
-/// minimum is the axis's true progress — capacity accounting must wait for the
-/// laggard ring.
-pub(super) fn retired_by_axis(slot_axes: &[usize], retired_slots: &[u32]) -> Vec<u32> {
-    let max_axis = slot_axes.iter().copied().max().unwrap_or(0);
-    let mut out = vec![0u32; max_axis + 1];
-    let mut seen = vec![false; max_axis + 1];
-    for (slot, &axis) in slot_axes.iter().enumerate() {
-        let Some(&retired) = retired_slots.get(slot) else {
-            continue;
-        };
-        if !seen[axis] || retired < out[axis] {
-            out[axis] = retired;
-            seen[axis] = true;
-        }
-    }
-    out
-}
-
-fn forward_retired_heartbeat(
+pub(super) fn report_ethercat_credit(
     pump_tx: &crossbeam_channel::Sender<crate::pump::PumpMsg>,
     mcu_id: u32,
-    retired_counts: Vec<u32>,
-) {
-    let _ = pump_tx.send(crate::pump::PumpMsg::Heartbeat(crate::pump::HeartbeatMsg {
-        mcu_id,
-        #[allow(clippy::cast_possible_truncation)]
-        axes: (0..retired_counts.len() as u8).collect(),
-        consumed_counts: None,
-        retired_counts,
-        retired_by: crate::pump::RetiredBy::EtherCat,
-    }));
+    slot_axes: &[usize],
+    filler: &crate::pump::RingFiller,
+    playback_clocks: &[u64],
+) -> Result<(), String> {
+    if slot_axes.len() != playback_clocks.len() {
+        return Err(format!(
+            "EtherCAT mcu {mcu_id}: {} slots have {} playback clocks",
+            slot_axes.len(),
+            playback_clocks.len()
+        ));
+    }
+    let mut played_by_axis = std::collections::BTreeMap::<u8, u64>::new();
+    for (&axis, &clock) in slot_axes.iter().zip(playback_clocks) {
+        let axis = u8::try_from(axis)
+            .map_err(|_| format!("EtherCAT mcu {mcu_id}: axis {axis} does not fit the pump key"))?;
+        played_by_axis
+            .entry(axis)
+            .and_modify(|played| *played = (*played).min(clock))
+            .or_insert(clock);
+    }
+    let mut filler = filler.lock_ok();
+    if filler.lane_count() != slot_axes.len()
+        || played_by_axis.keys().any(|&axis| !filler.drives_axis(axis))
+    {
+        return Err(format!(
+            "EtherCAT mcu {mcu_id}: heartbeat lanes do not match the claimed filler"
+        ));
+    }
+    let mut axes = Vec::with_capacity(played_by_axis.len());
+    let mut consumed_counts = Vec::with_capacity(played_by_axis.len());
+    let mut retired_counts = Vec::with_capacity(played_by_axis.len());
+    for (axis, played) in played_by_axis {
+        filler.retire_through(axis, played);
+        let (consumed, retired) = filler.credit(axis);
+        axes.push(axis);
+        consumed_counts.push(consumed);
+        retired_counts.push(retired);
+    }
+    pump_tx
+        .send(crate::pump::PumpMsg::Heartbeat(crate::pump::HeartbeatMsg {
+            mcu_id,
+            axes,
+            consumed_counts: Some(consumed_counts),
+            retired_counts,
+            retired_by: crate::pump::RetiredBy::EtherCat,
+        }))
+        .map_err(|_| format!("EtherCAT mcu {mcu_id}: pump control channel closed"))
 }
 
 pub(super) struct EthercatHeartbeatSupervisor {
@@ -745,6 +772,7 @@ pub(super) struct EthercatHeartbeatSupervisor {
     pub(super) latched_drive_fault: Arc<Mutex<HashMap<u32, u16>>>,
     pub(super) pump_tx: crossbeam_channel::Sender<crate::pump::PumpMsg>,
     pub(super) slot_axes: Vec<usize>,
+    pub(super) filler: crate::pump::RingFiller,
 }
 
 impl EthercatHeartbeatSupervisor {
@@ -753,30 +781,27 @@ impl EthercatHeartbeatSupervisor {
             self.on_drive_fault(hb.fault_code);
             return;
         }
-        forward_retired_heartbeat(
+        if let Err(error) = report_ethercat_credit(
             &self.pump_tx,
             self.mcu_id,
-            retired_by_axis(&self.slot_axes, &hb.retired_counts),
-        );
-    }
-
-    fn on_drive_fault(&self, fault_code: u16) {
-        match self.take_homing_run_owning_fault() {
-            Some(run) => self.fail_homing_run(run, fault_code),
-            None => self.latch_fault_for_klippy(fault_code),
+            &self.slot_axes,
+            &self.filler,
+            &hb.playback_clocks,
+        ) {
+            let _ = self.pump_tx.send(crate::pump::PumpMsg::StepcompressFatal {
+                mcu_id: self.mcu_id,
+                error,
+            });
         }
     }
 
-    fn take_homing_run_owning_fault(&self) -> Option<HomingRun> {
-        let mut guard = self.homing.run.lock_ok();
-        match guard.as_ref().map(|r| r.axis_key.mcu_id) {
-            Some(axis_mcu)
-                if crate::homing::route_drive_fault(self.mcu_id, Some(axis_mcu))
-                    == crate::homing::DriveFaultRoute::HomingError =>
-            {
-                guard.take()
-            }
-            _ => None,
+    fn on_drive_fault(&self, fault_code: u16) {
+        match self.homing.interrupt(
+            Some(self.mcu_id),
+            format!("drive fault 0x{fault_code:04x} during homing"),
+        ) {
+            Some(run) => self.fail_homing_run(run, fault_code),
+            None => self.latch_fault_for_klippy(fault_code),
         }
     }
 
@@ -785,17 +810,23 @@ impl EthercatHeartbeatSupervisor {
             .lock_ok()
             .insert(self.mcu_id, fault_code);
         crate::pump::emit_fault_snapshot("homing_drive_fault", i32::from(fault_code));
-        *self.homing.active_drip_cohort.lock_ok() = None;
         let _ = self
             .pump_tx
             .send(crate::pump::PumpMsg::Flush(run.all_axis_keys.clone()));
         let _ = self
             .pump_tx
             .send(crate::pump::PumpMsg::DripDisarm(run.cohort));
-        let _ = run.notify.send(Err(format!(
-            "drive fault 0x{fault_code:04x} during homing — \
-             following-error/torque limit exceeded (endstop failure?)"
-        )));
+        let error = self
+            .homing
+            .wait_for_pending_suppresses(run.cohort)
+            .err()
+            .unwrap_or_else(|| {
+                format!(
+                    "drive fault 0x{fault_code:04x} during homing — \
+                 following-error/torque limit exceeded (endstop failure?)"
+                )
+            });
+        self.homing.complete(run.cohort, Err(error));
     }
 
     fn latch_fault_for_klippy(&self, fault_code: u16) {

@@ -692,7 +692,7 @@ fn assemble_cartesian_state_corexy_omits_xy_when_one_motor_missing() {
 #[test]
 fn corexy_history_round_trip_reproduces_bench_symptom() {
     // Reproduces the trident-bench beacon scan: motor0/motor1 spans recorded
-    // through the ring (as commit_sent_bundle does) must invert to the
+    // through the ring (as commit_accepted_bundle does) must invert to the
     // commanded cartesian XY, not the raw CoreXY A/B sum/difference that
     // motion_state_at_clock used to leak straight through.
     use crate::kinematics::KinematicsModule;

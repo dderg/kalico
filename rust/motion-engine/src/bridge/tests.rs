@@ -1,7 +1,7 @@
 use crate::lock_ext::LockExt;
 use std::os::unix::io::FromRawFd;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use host_rt::host_io::{McuHostIo, McuHostIoConfig};
 use host_rt::mcu_serial_conn::McuSerialConn;
@@ -298,6 +298,23 @@ fn heartbeat_supervisor(
         latched_drive_fault: Arc::default(),
         pump_tx,
         slot_axes: vec![0, 1],
+        filler: Arc::new(Mutex::new(ethercat_rt::setpoint_fill::ChainFiller::new(
+            &[
+                ethercat_rt::setpoint_fill::LaneSpec {
+                    axis: 0,
+                    cmd_counts_per_mm: 1000.0,
+                    ff_lead_ns: 0,
+                },
+                ethercat_rt::setpoint_fill::LaneSpec {
+                    axis: 1,
+                    cmd_counts_per_mm: 1000.0,
+                    ff_lead_ns: 0,
+                },
+            ],
+            None,
+            250_000,
+            0,
+        ))),
     }
 }
 
@@ -328,8 +345,12 @@ fn every_fault_free_retirement_heartbeat_reaches_the_pump() {
     let crate::pump::PumpMsg::Heartbeat(last) = forwarded.last().unwrap() else {
         panic!("supervisor forwards PumpMsg::Heartbeat");
     };
-    assert_eq!(last.mcu_id, 2);
-    assert_eq!(last.retired_counts, vec![heartbeats - 1, heartbeats - 1]);
+    assert_eq!(last.consumed_counts, Some(vec![0, 0]));
+    assert_eq!(
+        last.retired_counts,
+        vec![0, 0],
+        "played cycles are not trajectory views"
+    );
 }
 
 #[test]
@@ -347,6 +368,146 @@ fn fault_heartbeat_is_latched_not_forwarded() {
     assert_eq!(
         supervisor.latched_drive_fault.lock_ok().get(&2).copied(),
         Some(314)
+    );
+}
+
+fn post_processor_engine() -> PyMotionEngine {
+    use crate::config::{AxisRegistry, PostProcessorDecl, PostProcessorSet};
+
+    let engine = PyMotionEngine::new();
+    let mut cfg = engine.planner_config.lock_ok();
+    let mut axes = cfg.axis_registry.decls().to_vec();
+    axes[0].post_processors = vec!["smooth".into(), "belt".into()];
+    cfg.axis_registry = AxisRegistry::try_new(axes).unwrap();
+    cfg.post_processors = PostProcessorSet::try_new(
+        &cfg.axis_registry,
+        &[
+            PostProcessorDecl {
+                name: "smooth".into(),
+                ty: "smooth_bell".into(),
+                params: vec![("smooth_time".into(), 0.01)],
+            },
+            PostProcessorDecl {
+                name: "belt".into(),
+                ty: "mode_inverse".into(),
+                params: vec![
+                    ("frequency_hz".into(), 131.0),
+                    ("damping_ratio".into(), 0.05),
+                ],
+            },
+        ],
+    )
+    .unwrap();
+    drop(cfg);
+    engine
+}
+
+#[test]
+fn post_processor_rejected_parameter_and_composition_preserve_configuration() {
+    let engine = post_processor_engine();
+    for value in [-1.0, 0.0] {
+        assert!(
+            engine
+                .update_post_processor("smooth", "smooth_time", value)
+                .is_err()
+        );
+        let cfg = engine.planner_config.lock_ok();
+        assert_eq!(
+            cfg.post_processors.param("smooth", "smooth_time"),
+            Some(0.01)
+        );
+        assert!(
+            cfg.compile_active_chains().unwrap().chains[0]
+                .kernel()
+                .is_some()
+        );
+    }
+}
+
+#[test]
+fn post_processor_bypass_retains_updates_and_rejects_invalid_restore() {
+    let engine = post_processor_engine();
+    let original_variance = engine
+        .planner_config
+        .lock_ok()
+        .compile_active_chains()
+        .unwrap()
+        .chains[0]
+        .kernel_variance_s2();
+    engine.set_post_processor_bypass(true).unwrap();
+    engine
+        .update_post_processor("smooth", "smooth_time", 0.02)
+        .unwrap();
+    assert!(
+        engine
+            .planner_config
+            .lock_ok()
+            .compile_active_chains()
+            .unwrap()
+            .chains[0]
+            .is_empty()
+    );
+    engine.set_post_processor_bypass(false).unwrap();
+    let restored_variance = engine
+        .planner_config
+        .lock_ok()
+        .compile_active_chains()
+        .unwrap()
+        .chains[0]
+        .kernel_variance_s2();
+    assert!((restored_variance / original_variance - 4.0).abs() < 1e-12);
+    assert_eq!(
+        engine
+            .planner_config
+            .lock_ok()
+            .post_processors
+            .param("smooth", "smooth_time"),
+        Some(0.02)
+    );
+    engine.set_post_processor_bypass(true).unwrap();
+    engine
+        .update_post_processor("smooth", "smooth_time", 0.0)
+        .unwrap();
+    assert!(engine.set_post_processor_bypass(false).is_err());
+    let cfg = engine.planner_config.lock_ok();
+    assert!(cfg.post_processor_bypass);
+    assert_eq!(
+        cfg.post_processors.param("smooth", "smooth_time"),
+        Some(0.0)
+    );
+    assert!(cfg.compile_active_chains().unwrap().chains[0].is_empty());
+}
+
+#[test]
+fn post_processor_failed_submission_preserves_parameters_and_bypass() {
+    let engine = post_processor_engine();
+    let (sc, home) = stream_config_from(&engine.planner_config.lock_ok());
+    let (dispatch, _) = counting_dispatch();
+    let chains = engine
+        .planner_config
+        .lock_ok()
+        .compile_active_chains()
+        .unwrap();
+    let mut planner = StreamWorkerHandle::spawn(sc, chains, home, dispatch, Arc::default(), None);
+    planner.shutdown();
+    *engine.planner.lock_ok() = Some(planner);
+
+    assert!(
+        engine
+            .update_post_processor("smooth", "smooth_time", 0.02)
+            .is_err()
+    );
+    assert!(engine.set_post_processor_bypass(true).is_err());
+    let cfg = engine.planner_config.lock_ok();
+    assert_eq!(
+        cfg.post_processors.param("smooth", "smooth_time"),
+        Some(0.01)
+    );
+    assert!(!cfg.post_processor_bypass);
+    assert!(
+        cfg.compile_active_chains().unwrap().chains[0]
+            .kernel()
+            .is_some()
     );
 }
 
