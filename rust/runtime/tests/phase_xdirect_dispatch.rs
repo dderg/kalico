@@ -189,7 +189,7 @@ fn phase_dispatch_empty_slot_table_latches_phase_motor_unmapped() {
     );
     assert_eq!(
         shared.last_error.load(Ordering::Acquire),
-        runtime::error::FaultCode::PhaseMotorUnmapped.as_i32(),
+        runtime_contract::error::FaultCode::PhaseMotorUnmapped.as_i32(),
         "unmapped phase motor must latch PhaseMotorUnmapped"
     );
     let detail = shared.fault_detail.load(Ordering::Acquire);

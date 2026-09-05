@@ -131,6 +131,7 @@ dependencies = [
  "cbindgen",
  "portable-atomic",
  "runtime",
+ "runtime-contract",
 ]
 
 [[package]]
@@ -330,6 +331,7 @@ dependencies = [
  "parking_lot",
  "rtrb",
  "runtime",
+ "runtime-contract",
  "serde",
  "serde_json",
  "time",
@@ -482,7 +484,7 @@ dependencies = [
  "mcu-protocol",
  "mcu-transport",
  "proptest",
- "runtime",
+ "runtime-contract",
  "serde",
  "serde_json",
  "serialport",
@@ -709,6 +711,7 @@ dependencies = [
  "planner-config",
  "pyo3",
  "runtime",
+ "runtime-contract",
  "serde_json",
  "serialport",
  "thiserror",
@@ -740,8 +743,8 @@ dependencies = [
  "log",
  "mcu-protocol",
  "mcu-transport",
- "motion-core",
  "runtime",
+ "runtime-contract",
  "serde_json",
  "thiserror",
  "time",
@@ -1120,7 +1123,12 @@ dependencies = [
  "loom",
  "portable-atomic",
  "proptest",
+ "runtime-contract",
 ]
+
+[[package]]
+name = "runtime-contract"
+version = "0.1.0"
 
 [[package]]
 name = "rustfft"

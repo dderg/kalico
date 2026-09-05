@@ -63,7 +63,7 @@ MIN_SCHEDULE_TIME = 0.100
 # Directly caused by the limitation of MAX_SCHEDULE_TICKS.
 MAX_NOMINAL_DURATION = 3.0
 
-# Wire-stable runtime fault codes; mirrors rust/runtime/src/error.rs FaultCode
+# Wire-stable runtime fault codes; mirrors rust/runtime-contract/src/error.rs FaultCode
 RUNTIME_FAULT_NAMES = {
     -29: "PhaseModeNotAvailable",
     -301: "SpiQueueOverflow",

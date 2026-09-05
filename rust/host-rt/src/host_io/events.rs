@@ -361,7 +361,7 @@ impl EventDispatcher {
                      stacked PC = addr2line target: the instruction the \
                      interrupted context was about to execute, i.e. the code \
                      holding the CPU/PRIMASK across the late tick; 0 for non-311 \
-                     faults; see runtime::error::FaultCode: -308=PieceStartInPast \
+                     faults; see runtime_contract::error::FaultCode: -308=PieceStartInPast \
                      -309=RingFull -310=StepsPerSampleExceeded \
                      -311=TickIntervalExceeded -302=MathNonFinite \
                      -303=PieceAdvanceUnderflow -300=StepQueueOverflow)"

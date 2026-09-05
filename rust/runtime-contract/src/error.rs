@@ -225,7 +225,7 @@ impl FaultCode {
     /// # Examples
     ///
     /// ```
-    /// # use runtime::error::FaultCode;
+    /// # use runtime_contract::error::FaultCode;
     /// assert_eq!(FaultCode::from_u16(0), Some(FaultCode::None));
     /// assert_eq!(FaultCode::from_u16(-310i16 as u16), Some(FaultCode::StepsPerSampleExceeded));
     /// assert_eq!(FaultCode::from_u16(-311i16 as u16), Some(FaultCode::TickIntervalExceeded));
@@ -313,7 +313,7 @@ impl FaultCode {
     /// # Examples
     ///
     /// ```
-    /// # use runtime::error::FaultCode;
+    /// # use runtime_contract::error::FaultCode;
     /// assert_eq!(FaultCode::None.code_name(), "None");
     /// assert_eq!(FaultCode::StepsPerSampleExceeded.code_name(), "StepsPerSampleExceeded");
     /// assert_eq!(FaultCode::TickIntervalExceeded.code_name(), "TickIntervalExceeded");

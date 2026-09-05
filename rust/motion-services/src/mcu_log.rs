@@ -1,16 +1,15 @@
-use motion_core::lock_ext::LockExt;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
 
 use host_rt::host_io::runtime_events::McuLogEvent;
 use host_rt::passthrough_queue::{McuHandle, PassthroughRouter};
-use runtime::error::FaultCode;
 use runtime::log_codes::{compose_msg, event_info, subsystem_name};
+use runtime_contract::error::FaultCode;
 
 use crate::logging::context::load_context;
 use crate::logging::schema::format_time;
@@ -70,7 +69,7 @@ pub fn build_mcu_log_hook(
     let dropped = AtomicU64::new(0);
     move |e: McuLogEvent| {
         let (time_str, time_estimated) = {
-            let guard = router.lock_ok();
+            let guard = router.lock().unwrap_or_else(PoisonError::into_inner);
             if let Some((dt, estimated)) = guard.wall_time_at_mcu(mcu, e.mcu_tick) {
                 (format_time(dt), estimated)
             } else {

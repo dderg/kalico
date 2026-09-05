@@ -5,12 +5,12 @@
 //! exchange. Runs abut by construction — a hole, an overlap, a late run or a
 //! drained ring under motion is a latched fault, never a pad or a clamp.
 
-use runtime::error::{
+use runtime::sample_run::SampleRunError;
+use runtime_contract::error::{
     RUNTIME_ERR_INTERNAL_INVARIANT, RUNTIME_ERR_SAMPLE_RATE_MISCONFIGURED,
     RUNTIME_ERR_SAMPLE_RING_FULL, RUNTIME_ERR_SAMPLE_RING_UNDERRUN, RUNTIME_ERR_SAMPLE_RUN_LATE,
     RUNTIME_ERR_SAMPLE_RUN_REJECTED,
 };
-use runtime::sample_run::SampleRunError;
 
 /// The executor code the endpoint reports in `SampleGridResponse.executor`:
 /// the setpoint ring is the only executor there is.

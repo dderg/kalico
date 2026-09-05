@@ -191,10 +191,11 @@ job_deny() {
 
 job_miri() {
     cd "$RUST"
+    MIRIFLAGS="-Zmiri-ignore-leaks" cargo +nightly miri test -p runtime-contract \
+        --test fault_encoding || return $?
     MIRIFLAGS="-Zmiri-ignore-leaks" cargo +nightly miri test -p runtime --features host \
-        --test fault_encoding \
         --test motion_core_accel \
-        --test seqlock_unit
+        --test seqlock_unit || return $?
     MIRIFLAGS="-Zmiri-ignore-leaks" cargo +nightly miri test -p runtime --features host \
         --lib phase_lut
 }

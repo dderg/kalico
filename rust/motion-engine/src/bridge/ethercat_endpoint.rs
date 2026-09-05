@@ -27,7 +27,7 @@ pub(crate) fn report_endpoint_death(
     mcu_id: u32,
     reason: &str,
 ) -> bool {
-    let code = runtime::error::FaultCode::EthercatEndpointDied.as_i32();
+    let code = runtime_contract::error::FaultCode::EthercatEndpointDied.as_i32();
     let message = format!("motion endpoint died mid-session (fault {code}): {reason}");
     let mut guard = latch.lock_ok();
     // First cause wins for BOTH the latched (operator-surfaced) message and the

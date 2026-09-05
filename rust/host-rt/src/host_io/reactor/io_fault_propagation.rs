@@ -2,7 +2,7 @@ use super::*;
 use crate::host_io::ReactorCommand;
 use crate::host_io::reactor::outbound::{PendingOutboundKind, PendingSubmission};
 use crate::host_io::test_harness::ReactorHarness;
-use runtime::error::FaultCode;
+use runtime_contract::error::FaultCode;
 use std::sync::Arc;
 use std::sync::mpsc::sync_channel;
 use std::time::{Duration, Instant};

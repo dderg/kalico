@@ -9,7 +9,7 @@
 )]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-use runtime::error::{
+use runtime_contract::error::{
     encode_clock_sync_quality, encode_invalid_curve_handle, encode_stream_state_violation,
 };
 

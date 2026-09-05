@@ -9,6 +9,7 @@ description = "Layer 4 MCU runtime — 40 kHz ISR with stub NURBS evaluator. Ste
 license.workspace = true
 
 [dependencies]
+runtime-contract = { path = "../runtime-contract" }
 heapless = { workspace = true }
 # `portable-atomic` provides software 64-bit atomics on targets that lack
 # native u64 CAS (thumbv7em-none-eabi[hf]: Cortex-M7 only has 32-bit

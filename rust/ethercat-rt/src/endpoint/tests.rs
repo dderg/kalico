@@ -24,7 +24,7 @@ use mcu_protocol::{
     },
     Decode, Encode,
 };
-use runtime::error::RUNTIME_ERR_SAMPLE_RING_FULL;
+use runtime_contract::error::RUNTIME_ERR_SAMPLE_RING_FULL;
 use trajectory::{
     ClockedMotorSpan, ContinuousAxis, MotorGroup, MotorSpan, MotorTerm, NudgeProfile,
 };

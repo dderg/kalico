@@ -23,7 +23,7 @@ pub const MCU_CHANNEL_EVENTS: u8 = 0x01;
 pub const MCU_CHANNEL_PIECES: u8 = 0x02;
 
 // result_codes mirror RUNTIME_ERR_* in src/mcu_transport_dispatch.c — keep in sync.
-// Canonical numeric values are defined in rust/runtime/src/error.rs.
+// Canonical numeric values are defined in rust/runtime-contract/src/error.rs.
 pub mod result_codes {
     pub const OK: i32 = 0;
     pub const RING_FULL: i32 = -309;

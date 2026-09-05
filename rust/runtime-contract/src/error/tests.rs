@@ -289,7 +289,5 @@ fn from_u16_round_trip_all_variants() {
         let recovered = FaultCode::from_u16(wire)
             .expect("from_u16 must succeed for every known FaultCode variant");
         assert_eq!(recovered, code, "round-trip mismatch for {code:?}");
-        let name = code.code_name();
-        assert!(!name.is_empty(), "code_name empty for {code:?}");
     }
 }

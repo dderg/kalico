@@ -7,8 +7,8 @@
 use core::sync::atomic::Ordering;
 
 use crate::engine::Engine;
-use crate::error::RUNTIME_OK;
 use crate::stepping_state::{StepMode, StepperBindingRust, TMC_CS_OID_NONE};
+use runtime_contract::error::RUNTIME_OK;
 
 fn engine_with_z_axis(mode: StepMode) -> Engine {
     let mut engine = Engine::default();

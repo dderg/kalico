@@ -10,8 +10,7 @@ pub use motion_core::{
 
 #[doc(hidden)]
 pub use motion_services::{
-    bg_call, logging, mcu_log, position_query, remote_trigger, servo_capture, servo_sdo,
-    servo_torque,
+    bg_call, logging, mcu_log, remote_trigger, servo_capture, servo_sdo, servo_torque,
 };
 
 #[cfg(feature = "test-support")]

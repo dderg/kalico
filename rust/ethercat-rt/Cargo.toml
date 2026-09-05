@@ -32,6 +32,7 @@ path = "src/bin/ethercat-rt-stub.rs"
 [dependencies]
 libm = { version = "0.2", default-features = false }
 runtime = { path = "../runtime", default-features = false, features = ["host"] }  # servo node: no stepper dispatch
+runtime-contract = { path = "../runtime-contract" }
 mcu-protocol = { path = "../mcu-protocol" }
 mcu-transport = { path = "../mcu-transport" }
 trajectory = { path = "../trajectory" }

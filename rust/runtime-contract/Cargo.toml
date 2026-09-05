@@ -1,0 +1,11 @@
+[package]
+name = "runtime-contract"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+description = "Dependency-free wire and FFI error contract shared by host and MCU runtimes."
+license.workspace = true
+
+[lints]
+workspace = true
