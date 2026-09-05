@@ -332,7 +332,7 @@ pub fn bind_phase_motor(
     slot_idx: u8,
 ) -> Result<(), SetStepModeError> {
     if (motor_idx as usize) >= MAX_STEPPER_OIDS
-        || (slot_idx as usize) >= crate::stepping_state::MAX_AXES
+        || (slot_idx as usize) >= runtime_contract::axes::MAX_AXES
     {
         return Err(SetStepModeError::OutOfRange);
     }

@@ -149,7 +149,7 @@ pub unsafe extern "C" fn runtime_query_motor_state(
     out_vel_q16: *mut i32,
     max: usize,
 ) -> i32 {
-    use runtime::stepping_state::MAX_AXES;
+    use runtime_contract::axes::MAX_AXES;
     if rt.is_null() || out_slots.is_null() || out_pos_q16.is_null() || out_vel_q16.is_null() {
         return RUNTIME_ERR_NULL_PTR;
     }

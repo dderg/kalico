@@ -22,15 +22,15 @@ use std::thread::JoinHandle;
 
 use crossbeam_channel::Sender;
 use host_rt::host_io::parser::ArgValue;
-use runtime::sample_run::{
+use runtime_contract::axes::MAX_AXES as HEARTBEAT_AXES;
+use runtime_contract::sample_run::{
     SAMPLE_RUN_COUNT_MAX, SAMPLE_RUN_DATA_MAX, SampleRunBuf, SampleRunError, delta_bytes,
     encode_deltas,
 };
-use runtime::sample_wire::{
+use runtime_contract::sample_wire::{
     SAMPLE_ANCHOR_NAME, SAMPLE_BARRIER_NAME, SAMPLE_OVERLAY_NAME, SAMPLE_RUN_NAME,
 };
-use runtime::stepping_state::MAX_AXES as HEARTBEAT_AXES;
-use runtime::sub_sample_timing::quantize_step_delta;
+use step_shim::quantize::quantize_step_delta;
 use trajectory::{BuzzProfile, ClockedMotorSpan, ContinuousAxis, MotorGroup, MotorSpan, MotorTerm};
 
 use super::barrier_ledger::{AckFault, BarrierId, BarrierLedger};
@@ -81,9 +81,9 @@ fn host_io_sample_position_query(
         })?;
         let params = io
             .call_args(
-                runtime::sample_wire::SAMPLE_GET_POSITION_NAME,
+                runtime_contract::sample_wire::SAMPLE_GET_POSITION_NAME,
                 &[("oid".to_string(), ArgValue::Int(i64::from(oid)))],
-                runtime::sample_wire::SAMPLE_POSITION_NAME,
+                runtime_contract::sample_wire::SAMPLE_POSITION_NAME,
                 SAMPLE_POSITION_QUERY_TIMEOUT,
             )
             .map_err(|e| format!("sample_get_position failed for mcu {mcu_id} oid {oid}: {e:?}"))?;

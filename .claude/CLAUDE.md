@@ -51,7 +51,7 @@ the header of `scripts/ci.sh` for the full list, e.g. `ruff`,
 
 Log via the structured pipeline (`event_log_emit` → `events/*.jsonl`), not
 `printf`/`output()` — it replaces `klippy.log` for MCU/structured diagnostics;
-the wire-stable event table is `rust/runtime/src/log_codes.rs`. To read or add
+the wire-stable event table is `rust/runtime-contract/src/log_codes.rs`. To read or add
 logs — `DIAG_DUMP`, crash forensics, filtering — use the `mcu-diagnostics`
 and `query-logs` skills.
 

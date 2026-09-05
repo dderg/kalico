@@ -1,15 +1,11 @@
+use crate::kinematics::KinematicsKind;
 use crate::kinematics::SPATIAL_AXES;
 use crate::types::AxisKey;
-use runtime::segment::KinematicTag;
 use std::collections::HashSet;
 
-pub const KINEMATICS_COREXY: u8 = KinematicTag::CoreXy as u8;
+pub const KINEMATICS_COREXY: u8 = KinematicsKind::CoreXy as u8;
 
-const _: () = assert!(
-    KinematicTag::CoreXy as u8 == 0,
-    "KinematicTag::CoreXy discriminant must be 0 — the Python↔Rust init_planner \
-     topology tuples mirror it numerically (see segment.rs); renumbering breaks that contract",
-);
+const _: () = assert!(KinematicsKind::CoreXy as u8 == 0);
 
 /// How one lane's motion reaches its motor: step/dir pulses the host
 /// compresses into `queue_step` frames, or absolute sample runs the mcu's

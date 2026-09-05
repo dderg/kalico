@@ -70,8 +70,7 @@ fn bench_chains() -> AxisChainSet {
 }
 
 fn run_pipeline() -> Vec<ContinuousSegment> {
-    // Neptune bench printer.cfg limits (same as dump_piece_stats.rs).
-    let limits = VelocityLimits::try_new(300.0, 4000.0, 8.0, 1_000_000.0).unwrap();
+    let limits = VelocityLimits::try_new(300.0, 4000.0, 8.0, f64::INFINITY).unwrap();
     let cfg = StreamConfig {
         corner: CornerFitConfig::default(),
         integration_tol: 1e-4,

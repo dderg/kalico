@@ -2,17 +2,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::capture::{Capture, PendingStart, PendingStop};
 use crate::damper::DiffDamperBank;
-use crate::dynamics::DynamicsModel;
 use crate::live_tap::LiveTap;
 use crate::mailbox::MailboxWorker;
 use crate::sensorless::SensorlessBank;
 use crate::server::FrameServer;
-use crate::setpoint::{SampleGrid, SetpointEntry, SetpointRing};
 use crate::strain_comp::StrainCompBank;
 use crate::stream_halt::StreamHalt;
 use crate::torque::TorqueGate;
 use crate::trim::DiffTrimBank;
 use crate::wire::status_heartbeat_frame;
+use ethercat_setpoint::dynamics::DynamicsModel;
+use ethercat_setpoint::setpoint::{SampleGrid, SetpointEntry, SetpointRing};
 
 #[cfg(feature = "hw")]
 mod bringup;

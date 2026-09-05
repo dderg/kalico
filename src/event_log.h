@@ -10,7 +10,7 @@
 #define EVENT_LOG_LEVEL_WARN  2
 #define EVENT_LOG_LEVEL_ERROR 3
 
-// MUST mirror the canonical table in rust/runtime/src/log_codes.rs.
+// MUST mirror the canonical table in rust/runtime-contract/src/log_codes.rs.
 #define EVENT_LOG_SUBSYS_RUNTIME 0
 #define EVENT_LOG_SUBSYS_MOTION  1
 #define EVENT_LOG_SUBSYS_ENDSTOP 3

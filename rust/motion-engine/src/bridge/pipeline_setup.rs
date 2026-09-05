@@ -307,7 +307,7 @@ impl PyMotionEngine {
                 self.register_barrier_ack_interceptor(
                     io,
                     cfg.mcu_id,
-                    runtime::sample_wire::SAMPLE_BARRIER_ACK_NAME,
+                    runtime_contract::sample_wire::SAMPLE_BARRIER_ACK_NAME,
                     "seq",
                     pump_control,
                     None,

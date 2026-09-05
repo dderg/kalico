@@ -298,23 +298,25 @@ fn heartbeat_supervisor(
         latched_drive_fault: Arc::default(),
         pump_tx,
         slot_axes: vec![0, 1],
-        filler: Arc::new(Mutex::new(ethercat_rt::setpoint_fill::ChainFiller::new(
-            &[
-                ethercat_rt::setpoint_fill::LaneSpec {
-                    axis: 0,
-                    cmd_counts_per_mm: 1000.0,
-                    ff_lead_ns: 0,
-                },
-                ethercat_rt::setpoint_fill::LaneSpec {
-                    axis: 1,
-                    cmd_counts_per_mm: 1000.0,
-                    ff_lead_ns: 0,
-                },
-            ],
-            None,
-            250_000,
-            0,
-        ))),
+        filler: Arc::new(Mutex::new(
+            ethercat_setpoint::setpoint_fill::ChainFiller::new(
+                &[
+                    ethercat_setpoint::setpoint_fill::LaneSpec {
+                        axis: 0,
+                        cmd_counts_per_mm: 1000.0,
+                        ff_lead_ns: 0,
+                    },
+                    ethercat_setpoint::setpoint_fill::LaneSpec {
+                        axis: 1,
+                        cmd_counts_per_mm: 1000.0,
+                        ff_lead_ns: 0,
+                    },
+                ],
+                None,
+                250_000,
+                0,
+            ),
+        )),
     }
 }
 
@@ -745,8 +747,8 @@ fn shutdown_does_not_abort_on_detached_ethercat_weak() {
     let fatal_flag = Arc::clone(&fatal_fired);
 
     let ring: crate::pump::RingFiller = Arc::new(std::sync::Mutex::new(
-        ethercat_rt::setpoint_fill::ChainFiller::new(
-            &[ethercat_rt::setpoint_fill::LaneSpec {
+        ethercat_setpoint::setpoint_fill::ChainFiller::new(
+            &[ethercat_setpoint::setpoint_fill::LaneSpec {
                 axis: 0,
                 cmd_counts_per_mm: 1_000.0,
                 ff_lead_ns: 0,
@@ -908,8 +910,8 @@ fn register_ethercat_mcu_seeds_nominal_clock_freq() {
             grid_clock: 10_500_000,
         },
         std::sync::Arc::new(std::sync::Mutex::new(
-            ethercat_rt::setpoint_fill::ChainFiller::new(
-                &[ethercat_rt::setpoint_fill::LaneSpec {
+            ethercat_setpoint::setpoint_fill::ChainFiller::new(
+                &[ethercat_setpoint::setpoint_fill::LaneSpec {
                     axis: 0,
                     cmd_counts_per_mm: 1_000.0,
                     ff_lead_ns: 0,

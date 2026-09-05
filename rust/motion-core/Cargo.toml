@@ -15,10 +15,10 @@ geometry = { path = "../geometry" }
 motion-pipeline = { path = "../motion-pipeline" }
 gcode = { path = "../gcode" }
 nurbs = { path = "../nurbs" }
-runtime = { path = "../runtime" }
+runtime-contract = { path = "../runtime-contract" }
 planner-config = { path = "../planner-config" }
 step-shim = { path = "../step-shim" }
-ethercat-rt = { path = "../ethercat-rt" }
+ethercat-setpoint = { path = "../ethercat-setpoint" }
 crossbeam-channel = "0.5"
 tracing = "0.1"
 thiserror = { workspace = true }
@@ -27,6 +27,7 @@ thiserror = { workspace = true }
 test-support = []
 
 [dev-dependencies]
+ethercat-rt = { path = "../ethercat-rt" }
 proptest = "1"
 libm = { version = "0.2", default-features = false }
 host-rt = { path = "../host-rt", features = ["test-harness"] }

@@ -7,8 +7,9 @@ use heapless::Vec;
 use runtime::dispatch_stepper::write_phase_coils;
 use runtime::phase_lut::PHASE_LUT;
 use runtime::state::{MAX_STEPPER_OIDS, SharedState};
-use runtime::stepping_state::{AxisState, MAX_STEPPERS_PER_AXIS, StepMode, StepperRef};
+use runtime::stepping_state::{AxisState, StepperRef};
 use runtime::test_xdirect_capture;
+use runtime_contract::axes::{MAX_STEPPERS_PER_AXIS, StepMode};
 
 fn make_phase_stepper(stepper_oid: u8, tmc_cs_oid: u8) -> StepperRef {
     StepperRef::new(stepper_oid, Some(tmc_cs_oid))

@@ -1,7 +1,8 @@
 use core::sync::atomic::Ordering;
 
 use crate::state::SharedState;
-use crate::stepping_state::{AxisState, MAX_AXES, StepMode, StepperBindingRust, TMC_CS_OID_NONE};
+use crate::stepping_state::AxisState;
+use runtime_contract::axes::{MAX_AXES, StepMode, StepperBindingRust, TMC_CS_OID_NONE};
 use runtime_contract::error::{RUNTIME_ERR_INVALID_ARG, RUNTIME_OK};
 
 use super::Engine;

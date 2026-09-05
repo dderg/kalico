@@ -7,7 +7,7 @@
 use core::sync::atomic::Ordering;
 
 use crate::engine::Engine;
-use crate::stepping_state::{StepMode, StepperBindingRust, TMC_CS_OID_NONE};
+use runtime_contract::axes::{StepMode, StepperBindingRust, TMC_CS_OID_NONE};
 use runtime_contract::error::RUNTIME_OK;
 
 fn engine_with_z_axis(mode: StepMode) -> Engine {

@@ -1,0 +1,17 @@
+[package]
+name = "ethercat-setpoint"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Shared DC-grid sampling, playback and feedforward kernels without an EtherCAT hardware endpoint."
+license.workspace = true
+
+[dependencies]
+mcu-protocol = { path = "../mcu-protocol" }
+runtime-contract = { path = "../runtime-contract" }
+trajectory = { path = "../trajectory" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[lints]
+workspace = true

@@ -648,16 +648,16 @@ mod broadcast_stop_tests {
 mod corexy_reconstruction_tests {
     use super::{FREQ, make_linear_move, record_synced, router_with_clock, shared};
     use crate::homing::{final_cartesian_position, reconstruct_cartesian_position};
+    use crate::kinematics::KinematicsKind;
     use crate::mcu_config::{AXIS_X, AXIS_Y, AXIS_Z, McuAxisConfig};
     use crate::motion_history::HistoryStore;
     use crate::types::AxisKey;
-    use runtime::segment::KinematicTag;
 
     fn corexy_cfg(mcu_id: u32) -> McuAxisConfig {
         McuAxisConfig {
             mcu_id,
             axes: vec![AXIS_X, AXIS_Y],
-            kinematics: KinematicTag::CoreXy as u8,
+            kinematics: KinematicsKind::CoreXy as u8,
             max_motor_velocity: Vec::new(),
             ethercat: false,
             ..Default::default()
@@ -668,7 +668,7 @@ mod corexy_reconstruction_tests {
         McuAxisConfig {
             mcu_id,
             axes: vec![AXIS_Z],
-            kinematics: KinematicTag::CoreXy as u8,
+            kinematics: KinematicsKind::CoreXy as u8,
             max_motor_velocity: Vec::new(),
             ethercat: false,
             ..Default::default()
@@ -882,9 +882,9 @@ mod stepcompress_reconcile_tests {
         StepcompressLane, StepcompressReconciliation, reconcile_stepcompress_axis,
         reconcile_stepcompress_lanes, stepcompress_lane,
     };
+    use crate::kinematics::KinematicsKind;
     use crate::mcu_config::{AXIS_X, AXIS_Y, AXIS_Z, LaneKind, McuAxisConfig, StepcompressEncoder};
     use crate::types::AxisKey;
-    use runtime::segment::KinematicTag;
     use std::cell::RefCell;
 
     const MCU_ID: u32 = 3;
@@ -894,7 +894,7 @@ mod stepcompress_reconcile_tests {
         McuAxisConfig {
             mcu_id: MCU_ID,
             axes: vec![AXIS_X, AXIS_Y],
-            kinematics: KinematicTag::CoreXy as u8,
+            kinematics: KinematicsKind::CoreXy as u8,
             max_motor_velocity: Vec::new(),
             ethercat: false,
             lane_kinds: vec![LaneKind::Pulse; 2],
@@ -1127,14 +1127,14 @@ mod stepcompress_reconcile_tests {
     #[test]
     fn grouped_lane_reconciliation_uses_history_and_reseeds_every_motor() {
         let mut grouped = cfg();
-        grouped.kinematics = KinematicTag::Cartesian as u8;
+        grouped.kinematics = KinematicsKind::Cartesian as u8;
         grouped.motor_counts = vec![2, 1];
         grouped.microstep_distance = vec![MICROSTEP; 3];
         grouped.invert_dir = vec![false; 3];
         grouped.stepper_oids = vec![11, 13, 12];
         grouped.step_pulse_seconds = vec![2e-6; 3];
         let mut z = pulse_z_cfg();
-        z.kinematics = KinematicTag::Cartesian as u8;
+        z.kinematics = KinematicsKind::Cartesian as u8;
         let configs = vec![grouped, z];
         let reseeded = RefCell::new(Vec::new());
         let pos = reconcile_stepcompress_lanes(

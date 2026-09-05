@@ -22,7 +22,6 @@ compile_error!(
      (e.g. motion-module-stepper); none is active"
 );
 
-pub mod segment;
 pub mod sizing;
 pub use sizing::RT_STORAGE_SIZE;
 pub mod clock;
@@ -30,16 +29,12 @@ pub mod dispatch_stepper;
 pub mod engine;
 pub mod fault_helpers;
 pub(crate) mod isr_phase;
-pub mod log_codes;
 pub mod phase_handover;
 pub mod phase_lut;
 #[cfg(feature = "sample-stepping")]
 pub mod sample_exec;
-pub mod sample_run;
-pub mod sample_wire;
 pub mod state;
 pub use state::{SetStepModeError, StepMode, set_step_mode};
 pub mod stepping_state;
-pub mod sub_sample_timing;
 pub mod test_xdirect_capture;
 pub mod tick;

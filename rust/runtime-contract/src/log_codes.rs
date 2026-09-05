@@ -19,7 +19,7 @@ pub const SUBSYSTEM_DIAG: u8 = 4;
 /// # Examples
 ///
 /// ```
-/// use runtime::log_codes::{subsystem_name, SUBSYSTEM_RUNTIME};
+/// use runtime_contract::log_codes::{subsystem_name, SUBSYSTEM_RUNTIME};
 /// assert_eq!(subsystem_name(SUBSYSTEM_RUNTIME), "runtime");
 /// assert_eq!(subsystem_name(0xFF), "unknown");
 /// ```
@@ -106,7 +106,7 @@ pub const EVENT_DIAG_RUST_FAULT: u16 = 8;
 /// # Examples
 ///
 /// ```
-/// use runtime::log_codes::{event_info, SUBSYSTEM_TICK, EVENT_TICK_INTERVAL_EXCEEDED};
+/// use runtime_contract::log_codes::{event_info, SUBSYSTEM_TICK, EVENT_TICK_INTERVAL_EXCEEDED};
 ///
 /// let (name, tmpl) = event_info(SUBSYSTEM_TICK, EVENT_TICK_INTERVAL_EXCEEDED);
 /// assert_eq!(name, "tick.interval_exceeded");
@@ -306,45 +306,6 @@ pub fn event_info(subsystem: u8, event: u16) -> (&'static str, &'static str) {
         ),
         _ => ("unknown", ""),
     }
-}
-
-/// Compose the `_msg` string from a template and two numeric args.
-///
-/// Placeholders `{arg0}`/`{arg1}` render the raw `u32` as decimal. Typed
-/// forms reinterpret the same bits for display:
-/// - `{arg0:i32}` / `{arg1:i32}` — signed decimal (e.g. a negative ms delta)
-/// - `{arg0:hex}` / `{arg1:hex}` — `0x`-prefixed hex (program counters,
-///   addresses)
-/// - `{arg0:hi16}` / `{arg1:hi16}` — high 16 bits, decimal
-/// - `{arg0:lo16}` / `{arg1:lo16}` — low 16 bits, decimal
-///
-/// # Examples
-///
-/// ```
-/// use runtime::log_codes::compose_msg;
-///
-/// let msg = compose_msg("TIM5 inter-arrival exceeded: got={arg0} limit={arg1}", 120, 100);
-/// assert_eq!(msg, "TIM5 inter-arrival exceeded: got=120 limit=100");
-///
-/// let msg2 = compose_msg("engine reset", 0, 0);
-/// assert_eq!(msg2, "engine reset");
-///
-/// let msg3 = compose_msg("pc={arg0:hex}", 0x0800_1234, 0);
-/// assert_eq!(msg3, "pc=0x8001234");
-/// ```
-#[cfg(feature = "host")]
-pub fn compose_msg(template: &str, arg0: u32, arg1: u32) -> String {
-    template
-        .replace("{arg0:i32}", &format!("{}", arg0 as i32))
-        .replace("{arg1:i32}", &format!("{}", arg1 as i32))
-        .replace("{arg0:hex}", &format!("{arg0:#x}"))
-        .replace("{arg1:hex}", &format!("{arg1:#x}"))
-        .replace("{arg0:hi16}", &format!("{}", arg0 >> 16))
-        .replace("{arg1:hi16}", &format!("{}", arg1 >> 16))
-        .replace("{arg0:lo16}", &format!("{}", arg0 & 0xffff))
-        .replace("{arg1:lo16}", &format!("{}", arg1 & 0xffff))
-        .replace("{arg0}", &format!("{arg0}"))
-        .replace("{arg1}", &format!("{arg1}"))
 }
 
 #[cfg(test)]

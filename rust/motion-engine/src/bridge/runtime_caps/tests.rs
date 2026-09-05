@@ -1,6 +1,6 @@
 use super::*;
-use runtime::segment::KinematicTag;
-use runtime::stepping_state::MAX_AXES;
+use motion_core::kinematics::KinematicsKind;
+use runtime_contract::axes::MAX_AXES;
 
 #[test]
 fn cartesian_identity_passthrough() {
@@ -14,7 +14,7 @@ fn cartesian_identity_passthrough() {
     v[1] = Some(-1.0);
     v[2] = Some(0.0);
     v[3] = Some(3.0);
-    let out = assemble_cartesian(&m, &v, KinematicTag::Cartesian as u8).unwrap();
+    let out = assemble_cartesian(&m, &v, KinematicsKind::Cartesian as u8).unwrap();
     assert_eq!(out["x"], (10.0, 1.0));
     assert_eq!(out["y"], (20.0, -1.0));
     assert_eq!(out["z"], (5.0, 0.0));
@@ -32,7 +32,7 @@ fn corexy_inverse_mix() {
     m[0] = Some(motor_a);
     m[1] = Some(motor_b);
     m[2] = Some(0.0);
-    let out = assemble_cartesian(&m, &v, KinematicTag::CoreXy as u8).unwrap();
+    let out = assemble_cartesian(&m, &v, KinematicsKind::CoreXy as u8).unwrap();
     assert!((out["x"].0 - expected_x).abs() < 1e-9);
     assert!((out["y"].0 - expected_y).abs() < 1e-9);
 }

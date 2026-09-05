@@ -7,7 +7,7 @@ use crate::lock_ext::LockExt;
 
 #[test]
 fn ethercat_credit_waits_for_delivery_and_the_laggard_motor_playback() {
-    use ethercat_rt::setpoint_fill::{CLOCK_FREQ_HZ, ChainFiller, LaneSpec};
+    use ethercat_setpoint::setpoint_fill::{CLOCK_FREQ_HZ, ChainFiller, LaneSpec};
     use std::sync::{Arc, Mutex};
     use trajectory::{ClockedMotorSpan, ContinuousAxis, MotorGroup, MotorSpan, MotorTerm};
 

@@ -1,6 +1,6 @@
 use super::*;
 use nurbs::ScalarNurbs;
-use runtime::sample_run::decode_deltas;
+use runtime_contract::sample_run::decode_deltas;
 use std::sync::atomic::AtomicU64;
 use trajectory::{MotorGroup, MotorSpan};
 

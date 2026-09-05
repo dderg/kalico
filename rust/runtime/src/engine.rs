@@ -2,7 +2,8 @@ use core::sync::atomic::{AtomicI32, AtomicU8, Ordering};
 
 use crate::clock::TickCounter;
 use crate::state::SharedState;
-use crate::stepping_state::{AxisState, MAX_AXES};
+use crate::stepping_state::AxisState;
+use runtime_contract::axes::MAX_AXES;
 
 mod config;
 mod manual;

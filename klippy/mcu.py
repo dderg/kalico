@@ -29,7 +29,7 @@ from .mcu_pins import (  # noqa: F401
 
 STEPCOMPRESS_MAX_ERROR_DEFAULT = 0.000025
 
-# Mirrors src/sample_wire.h / rust/runtime/src/sample_wire.rs. The wire
+# Mirrors src/sample_wire.h / rust/runtime-contract/src/sample_wire.rs. The wire
 # contract lives in one place per language and test_sample_wire.py asserts the
 # three copies agree.
 SAMPLE_ANCHOR_CMD = "sample_anchor oid=%c clock=%u position=%i"

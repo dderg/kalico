@@ -6,10 +6,10 @@ use super::{discard_motion, respond_fault_heartbeat, EndpointCtx};
 use crate::capture::{CaptureRecord, DriveSample, FLAG_MOTION_ACTIVE, FLAG_TORQUE_ENABLED};
 use crate::claim::{eval_wkc, WkcDecision};
 use crate::clock::raw_from_monotonic_ns;
-use crate::dynamics::{clamp_torque, DynamicsModel};
-use crate::setpoint::{GridPhaseError, Played, SetpointEntry};
 use crate::torque::{TickAction, TorqueState};
 use crate::wire::{endstop_trip_frame, status_heartbeat_frame, ENGINE_STATE_FAULT};
+use ethercat_setpoint::dynamics::{clamp_torque, DynamicsModel};
+use ethercat_setpoint::setpoint::{GridPhaseError, Played, SetpointEntry};
 
 macro_rules! log_slot_drive_telemetry {
     ($level:ident, $event:literal, $msg:literal, $ctx:expr, $slot:expr, $t:expr,

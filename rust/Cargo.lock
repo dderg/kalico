@@ -322,6 +322,7 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "crossbeam-channel",
+ "ethercat-setpoint",
  "host-rt",
  "libc",
  "libm",
@@ -330,16 +331,24 @@ dependencies = [
  "nurbs",
  "parking_lot",
  "rtrb",
- "runtime",
  "runtime-contract",
- "serde",
  "serde_json",
  "time",
- "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
  "trajectory",
  "zstd",
+]
+
+[[package]]
+name = "ethercat-setpoint"
+version = "0.1.0"
+dependencies = [
+ "mcu-protocol",
+ "runtime-contract",
+ "serde",
+ "toml 0.8.23",
+ "trajectory",
 ]
 
 [[package]]
@@ -673,6 +682,7 @@ version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
  "ethercat-rt",
+ "ethercat-setpoint",
  "gcode",
  "geometry",
  "host-rt",
@@ -683,7 +693,7 @@ dependencies = [
  "nurbs",
  "planner-config",
  "proptest",
- "runtime",
+ "runtime-contract",
  "serialport",
  "step-shim",
  "thiserror",
@@ -698,6 +708,7 @@ dependencies = [
  "config-doc",
  "crossbeam-channel",
  "ethercat-rt",
+ "ethercat-setpoint",
  "geometry",
  "host-rt",
  "libc",
@@ -710,7 +721,6 @@ dependencies = [
  "pipeline-snapshot",
  "planner-config",
  "pyo3",
- "runtime",
  "runtime-contract",
  "serde_json",
  "serialport",
@@ -743,7 +753,6 @@ dependencies = [
  "log",
  "mcu-protocol",
  "mcu-transport",
- "runtime",
  "runtime-contract",
  "serde_json",
  "thiserror",

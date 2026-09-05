@@ -10,7 +10,7 @@ pub unsafe extern "C" fn runtime_configure_axis(
     axis_idx: u8,
     mode: u8,
     microstep_distance_f32_bits: u32,
-    bindings_ptr: *const runtime::stepping_state::StepperBindingRust,
+    bindings_ptr: *const runtime_contract::axes::StepperBindingRust,
     stepper_count: u8,
 ) -> i32 {
     if rt.is_null() {
@@ -20,12 +20,12 @@ pub unsafe extern "C" fn runtime_configure_axis(
         return RUNTIME_ERR_NOT_INIT;
     }
     let mode_enum = match mode {
-        0 => runtime::stepping_state::StepMode::Pulse,
-        1 => runtime::stepping_state::StepMode::Phase,
+        0 => runtime_contract::axes::StepMode::Pulse,
+        1 => runtime_contract::axes::StepMode::Phase,
         _ => return RUNTIME_ERR_INVALID_ARG,
     };
     let mstep_dist = f32::from_bits(microstep_distance_f32_bits);
-    let bindings: &[runtime::stepping_state::StepperBindingRust] = if stepper_count == 0 {
+    let bindings: &[runtime_contract::axes::StepperBindingRust] = if stepper_count == 0 {
         &[]
     } else if bindings_ptr.is_null() {
         return RUNTIME_ERR_NULL_PTR;
@@ -51,7 +51,7 @@ pub unsafe extern "C" fn runtime_configure_axis(
                 if let Some(Some(axis)) = (*isr_ptr).engine.stepping_axes.get_mut(axis_idx as usize)
                 {
                     axis.mode.store(
-                        runtime::stepping_state::StepMode::Phase as u8,
+                        runtime_contract::axes::StepMode::Phase as u8,
                         core::sync::atomic::Ordering::Release,
                     );
                 }

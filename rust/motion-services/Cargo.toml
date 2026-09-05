@@ -10,7 +10,6 @@ license.workspace = true
 [dependencies]
 host-rt = { path = "../host-rt" }
 mcu-protocol = { path = "../mcu-protocol" }
-runtime = { path = "../runtime" }
 runtime-contract = { path = "../runtime-contract" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "env-filter", "std", "fmt"] }

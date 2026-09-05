@@ -6,7 +6,6 @@ use super::{AxisFrame, HeartbeatMsg, PumpMsg, SendError};
 use crate::lock_ext::LockExt;
 use crate::mcu_config::{McuAxisConfig, StepcompressEncoder};
 use crossbeam_channel::Sender;
-use ethercat_rt::buzz::MAX_BUZZ_SLOTS;
 use host_rt::host_io::McuHostIo;
 use host_rt::host_io::parser::ArgValue;
 use std::collections::VecDeque;
@@ -764,9 +763,10 @@ impl StepcompressEndpoint {
         if !self.transport_idle() || self.pending_retire.is_some() {
             return Err(self.fatal("resonance buzz rejected while trajectory remains queued"));
         }
-        if self.lanes.len() > MAX_BUZZ_SLOTS {
+        let max_buzz_motors = u8::BITS as usize;
+        if self.lanes.len() > max_buzz_motors {
             return Err(self.fatal(&format!(
-                "{} motors exceed the {MAX_BUZZ_SLOTS}-motor buzz limit",
+                "{} motors exceed the {max_buzz_motors}-motor buzz limit",
                 self.lanes.len()
             )));
         }

@@ -13,9 +13,6 @@ use ethercat_rt::clock::monotonic_ns;
 use ethercat_rt::sdo::{execute_sdo_read, execute_sdo_write, DictObject, DictSdoBus};
 use ethercat_rt::sensorless::{SensorlessBank, ERR_ARM_SENSORLESS_BAD_THRESHOLD};
 use ethercat_rt::server::FrameServer;
-use ethercat_rt::setpoint::{
-    Played, RunHeader, SetpointEntry, SetpointRing, EXECUTOR_SETPOINT_RING, RING_DEPTH_CYCLES,
-};
 use ethercat_rt::stream_halt::StreamHalt;
 use ethercat_rt::torque::{
     CommandAction, TickAction, TorqueGate, TorqueState, ERR_ENABLE_FAILED, ERR_PIECES_WHILE_FAULTED,
@@ -30,6 +27,9 @@ use ethercat_rt::wire::{
     set_strain_comp_response_frame, set_torque_response_frame, start_capture_response_frame,
     status_heartbeat_frame, stepper_suppress_response_frame, stop_capture_response_frame,
     stop_response_frame, Command, ENGINE_STATE_FAULT,
+};
+use ethercat_setpoint::setpoint::{
+    Played, RunHeader, SetpointEntry, SetpointRing, EXECUTOR_SETPOINT_RING, RING_DEPTH_CYCLES,
 };
 use mcu_protocol::messages::{
     SdoReadResponse, SlaveState, StopCaptureResponse, LANE_RUN_FLAG_REANCHOR, LANE_RUN_FLAG_TAIL,

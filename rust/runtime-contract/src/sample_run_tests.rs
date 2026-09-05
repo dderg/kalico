@@ -6,6 +6,7 @@
 )]
 
 use super::*;
+use std::{vec, vec::Vec};
 
 fn header(start_clock: u64, interval_ticks: u32, count: u16) -> SampleRunHeader {
     SampleRunHeader::new(start_clock, interval_ticks, count)

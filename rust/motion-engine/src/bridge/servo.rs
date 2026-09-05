@@ -676,15 +676,15 @@ impl PyMotionEngine {
         }
         let wire_pairs = validate_dynamics_pairs(&frame, modes, slots, &pairs, &direction_split)
             .map_err(PyRuntimeError::new_err)?;
-        let pair_specs: Vec<ethercat_rt::dynamics::PairSpec> = wire_pairs
+        let pair_specs: Vec<ethercat_setpoint::dynamics::PairSpec> = wire_pairs
             .iter()
-            .map(|pair| ethercat_rt::dynamics::PairSpec {
+            .map(|pair| ethercat_setpoint::dynamics::PairSpec {
                 first: pair.first as usize,
                 second: pair.second as usize,
                 direction_split: pair.direction_split,
             })
             .collect();
-        let host_model = ethercat_rt::dynamics::DynamicsModel::from_parts(
+        let host_model = ethercat_setpoint::dynamics::DynamicsModel::from_parts(
             slots,
             modes,
             &frame,
@@ -1050,7 +1050,7 @@ fn reconfigure_feedforward<T>(
     conn: &host_rt::mcu_serial_conn::McuSerialConn,
     ring: &crate::pump::RingFiller,
     what: &str,
-    apply: impl FnOnce(&mut ethercat_rt::setpoint_fill::ChainFiller) -> Result<T, String>,
+    apply: impl FnOnce(&mut ethercat_setpoint::setpoint_fill::ChainFiller) -> Result<T, String>,
 ) -> Result<T, String> {
     let mut filler = ring.lock_ok();
     let grid =

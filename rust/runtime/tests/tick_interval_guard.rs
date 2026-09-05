@@ -5,8 +5,8 @@ use core::sync::atomic::Ordering;
 use runtime::clock::WidenState;
 use runtime::engine::Engine;
 use runtime::state::{IsrState, SharedState};
-use runtime::stepping_state::{StepMode, StepperBindingRust, TMC_CS_OID_NONE};
 use runtime::tick::isr_sample_tick;
+use runtime_contract::axes::{StepMode, StepperBindingRust, TMC_CS_OID_NONE};
 use runtime_contract::error::FaultCode;
 
 const CLOCK_FREQ: u32 = 520_000_000;

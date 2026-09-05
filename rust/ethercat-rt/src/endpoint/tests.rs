@@ -40,11 +40,11 @@ use crate::mailbox::{MailboxWorker, WorkerScheduling};
 use crate::sdo::SdoBus;
 use crate::sensorless::SensorlessBank;
 use crate::server::FrameServer;
-use crate::setpoint::Played;
-use crate::setpoint_fill::{ChainFiller, LaneSpec, CLOCK_FREQ_HZ};
 use crate::stream_halt::StreamHalt;
 use crate::torque::{TorqueGate, TorqueState};
 use crate::trim::DiffTrimBank;
+use ethercat_setpoint::setpoint::Played;
+use ethercat_setpoint::setpoint_fill::{ChainFiller, LaneSpec, CLOCK_FREQ_HZ};
 
 const NUM_SLAVES: usize = 2;
 const COUNTS_PER_MM: f64 = 3276.8;
@@ -250,9 +250,10 @@ impl Bench {
     /// torque feedforward at fill time, the endpoint only clamps it and adds
     /// the pin.
     fn install_dynamics(&mut self, toml: &str) {
-        let for_host = crate::dynamics::DynamicsModel::from_toml_str(toml).expect("valid profile");
+        let for_host =
+            ethercat_setpoint::dynamics::DynamicsModel::from_toml_str(toml).expect("valid profile");
         let for_endpoint =
-            crate::dynamics::DynamicsModel::from_toml_str(toml).expect("valid profile");
+            ethercat_setpoint::dynamics::DynamicsModel::from_toml_str(toml).expect("valid profile");
         self.host = ChainFiller::new(
             &lane_specs(),
             Some(for_host),
@@ -303,7 +304,7 @@ impl Bench {
                 .ctx
                 .sp_rings
                 .iter()
-                .all(|r| r.free() >= crate::setpoint::MAX_FILL_CYCLES)
+                .all(|r| r.free() >= ethercat_setpoint::setpoint::MAX_FILL_CYCLES)
         {
             let runs = self.host.drain().expect("host fill");
             if runs.is_empty() {
@@ -383,12 +384,12 @@ fn raw_ctx(name: &str, drive: impl DriveChain + 'static) -> EndpointCtx {
         drive_scratch: super::cycle::DriveScratch::new(NUM_SLAVES),
         run_limits: Vec::new(),
         sp_rings: (0..NUM_SLAVES)
-            .map(|slot| crate::setpoint::SetpointRing::new(slot, CYCLE_NS as u32))
+            .map(|slot| ethercat_setpoint::setpoint::SetpointRing::new(slot, CYCLE_NS as u32))
             .collect(),
-        grid: crate::setpoint::SampleGrid::new(CYCLE_NS),
+        grid: ethercat_setpoint::setpoint::SampleGrid::new(CYCLE_NS),
         ring_origin: vec![None; NUM_SLAVES],
         sp_play_scratch: vec![None; NUM_SLAVES],
-        sp_fill_scratch: Vec::with_capacity(crate::setpoint::MAX_FILL_CYCLES),
+        sp_fill_scratch: Vec::with_capacity(ethercat_setpoint::setpoint::MAX_FILL_CYCLES),
         reclaim: crate::reclaim::Reclaim::spawn(),
         last_grid_index: 0,
         last_grid_clock: 0,
@@ -1374,7 +1375,7 @@ pin_lead_us = 0.0
 fn pin_ctx(name: &str, toml: &str) -> Bench {
     let mut ctx = test_ctx(name);
     ctx.install_dynamics(toml);
-    let model = crate::dynamics::DynamicsModel::from_toml_str(toml).unwrap();
+    let model = ethercat_setpoint::dynamics::DynamicsModel::from_toml_str(toml).unwrap();
     ctx.pin = super::cycle::PinState::build(&model, ctx.cycle_ns);
     ctx.torque_clamp_tenths = vec![3000; NUM_SLAVES];
     ctx
@@ -1769,7 +1770,7 @@ fn pin_frame_cancellation(
     pin_zeta: &[f32],
     acc_seq: &[Vec<f32>],
 ) -> (Vec<Vec<f32>>, Vec<Vec<f32>>) {
-    use crate::dynamics::DynamicsModel;
+    use ethercat_setpoint::dynamics::DynamicsModel;
     let zeros_m = vec![0.0f32; n_modes];
     let model = DynamicsModel::from_parts(
         n_slots,
@@ -1875,7 +1876,7 @@ fn assert_pin_cancels_every_mode(
     let pin_zeta = vec![0.08f32; n_modes];
     // Model handle for the F⁺ excitation columns (min-norm slot accel that
     // realizes a pure mode-k acceleration).
-    let model = crate::dynamics::DynamicsModel::from_parts(
+    let model = ethercat_setpoint::dynamics::DynamicsModel::from_parts(
         n_slots,
         n_modes,
         frame,
@@ -2079,7 +2080,7 @@ fn pin_residual_demod_is_unbiased_by_zeta() {
 /// and 600 µs), worst exactly where the machine accelerates hardest.
 #[test]
 fn pin_torque_vanishes_at_constant_accel_for_every_lead() {
-    use crate::dynamics::DynamicsModel;
+    use ethercat_setpoint::dynamics::DynamicsModel;
     const A_CMD: f32 = 20_000.0; // mm/s², a hard print acceleration
     const PIN_MASS: f32 = 0.02;
     for &f_b in &[100.0f64, 130.0, 160.0] {
@@ -2250,7 +2251,7 @@ fn a_run_naming_a_slot_off_its_axis_is_refused() {
     let runs = vec![lane_run(0, 1, 40, &[10])];
     assert_eq!(
         super::commands::fill_lane_runs(&mut ctx, &runs).0,
-        crate::setpoint::ERR_LANE_SLOT_MISMATCH
+        ethercat_setpoint::setpoint::ERR_LANE_SLOT_MISMATCH
     );
     assert!(
         ctx.sp_rings.iter().all(|r| r.is_empty()),
@@ -2262,7 +2263,7 @@ fn a_run_naming_a_slot_off_its_axis_is_refused() {
 fn a_run_past_the_frame_cap_never_reaches_the_dc_scratch() {
     let mut ctx = test_ctx("oversized-run");
     let capacity = ctx.sp_fill_scratch.capacity();
-    let samples = vec![0i32; crate::setpoint::MAX_FILL_CYCLES + 1];
+    let samples = vec![0i32; ethercat_setpoint::setpoint::MAX_FILL_CYCLES + 1];
     let runs = vec![lane_run(0, 0, 40, &samples)];
     let (result, entries) = super::commands::fill_lane_runs(&mut ctx, &runs);
     assert_eq!(result, RUNTIME_ERR_SAMPLE_RING_FULL);

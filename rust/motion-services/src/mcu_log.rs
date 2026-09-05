@@ -8,12 +8,26 @@ use time::OffsetDateTime;
 
 use host_rt::host_io::runtime_events::McuLogEvent;
 use host_rt::passthrough_queue::{McuHandle, PassthroughRouter};
-use runtime::log_codes::{compose_msg, event_info, subsystem_name};
 use runtime_contract::error::FaultCode;
+use runtime_contract::log_codes::{event_info, subsystem_name};
 
 use crate::logging::context::load_context;
 use crate::logging::schema::format_time;
 use crate::logging::writer::RotatingJsonlWriter;
+
+fn compose_msg(template: &str, arg0: u32, arg1: u32) -> String {
+    template
+        .replace("{arg0:i32}", &format!("{}", arg0 as i32))
+        .replace("{arg1:i32}", &format!("{}", arg1 as i32))
+        .replace("{arg0:hex}", &format!("{arg0:#x}"))
+        .replace("{arg1:hex}", &format!("{arg1:#x}"))
+        .replace("{arg0:hi16}", &format!("{}", arg0 >> 16))
+        .replace("{arg1:hi16}", &format!("{}", arg1 >> 16))
+        .replace("{arg0:lo16}", &format!("{}", arg0 & 0xffff))
+        .replace("{arg1:lo16}", &format!("{}", arg1 & 0xffff))
+        .replace("{arg0}", &format!("{arg0}"))
+        .replace("{arg1}", &format!("{arg1}"))
+}
 
 fn mcu_level_str(level: u8) -> &'static str {
     match level {
@@ -168,3 +182,7 @@ pub fn build_mcu_log_hook(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mcu_log_tests.rs"]
+mod tests;

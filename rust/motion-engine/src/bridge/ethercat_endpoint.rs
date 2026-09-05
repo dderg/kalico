@@ -141,7 +141,7 @@ pub(crate) fn message_for_claim_error(
                 "ethercat {label}: executor mismatch — endpoint reports executor code {code}, \
                  expected {expected} (setpoint ring) — this endpoint still runs a deleted \
                  executor, rebuild rust/ethercat-rt, then FIRMWARE_RESTART",
-                expected = ethercat_rt::setpoint::EXECUTOR_SETPOINT_RING
+                expected = ethercat_setpoint::setpoint::EXECUTOR_SETPOINT_RING
             ),
             ReportedExecutor::Unsupported(detail) => format!(
                 "ethercat {label}: executor mismatch — the endpoint could not report its \
@@ -422,7 +422,7 @@ pub(crate) fn verify_sample_grid(
     let reply = SampleGridResponse::decode_from(&mut Cursor::new(&body))
         .map_err(|e| EndpointClaimError::Protocol(format!("decode SampleGridResponse: {e:?}")))?;
 
-    if reply.executor != ethercat_rt::setpoint::EXECUTOR_SETPOINT_RING {
+    if reply.executor != ethercat_setpoint::setpoint::EXECUTOR_SETPOINT_RING {
         return Err(mismatch(ReportedExecutor::Code(reply.executor)));
     }
 
@@ -452,14 +452,14 @@ pub(crate) fn build_ring_filler(
     dynamics_profile: Option<&str>,
     drives: &[EthercatDrive],
 ) -> Result<crate::pump::RingFiller, String> {
-    use ethercat_rt::setpoint_fill::{ChainFiller, LaneSpec};
+    use ethercat_setpoint::setpoint_fill::{ChainFiller, LaneSpec};
 
     if grid.cycle_ticks == 0 {
         return Err("endpoint reported a zero-length DC cycle".to_owned());
     }
     let interval_ns = u64::from(grid.cycle_ticks);
     let per_slot: Vec<Option<String>> = drives.iter().map(|d| d.dynamics_profile.clone()).collect();
-    let dynamics = ethercat_rt::dynamics::chain_model_from_profiles(
+    let dynamics = ethercat_setpoint::dynamics::chain_model_from_profiles(
         dynamics_profile,
         &per_slot,
         drives.len(),

@@ -11,7 +11,7 @@
 use core::sync::atomic::Ordering;
 
 use runtime::engine::Engine;
-use runtime::stepping_state::{MAX_AXES, StepMode, StepperBindingRust, TMC_CS_OID_NONE};
+use runtime_contract::axes::{MAX_AXES, StepMode, StepperBindingRust, TMC_CS_OID_NONE};
 
 const _ASSERT_MAX_AXES: () = assert!(MAX_AXES == 8);
 

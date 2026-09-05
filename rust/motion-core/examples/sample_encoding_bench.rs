@@ -13,7 +13,7 @@
 //
 // Two candidate encodings are measured over identical runs:
 //   varint  - zigzag LEB128 first differences, the codec in
-//             runtime::sample_run (measured, not assumed)
+//             runtime_contract::sample_run (measured, not assumed)
 //   i16     - fixed two-byte little-endian first differences, with a 1-byte
 //             escape plus a 4-byte i32 for any delta i16 cannot hold
 //
@@ -25,8 +25,8 @@ use std::thread;
 use geometry::{CornerFitConfig, VelocityLimits};
 use motion_core::classify::build_move;
 use motion_pipeline::{StreamConfig, TrajectoryItem, setup_stages};
-use runtime::sample_run::{SAMPLE_RUN_COUNT_MAX, SAMPLE_RUN_DATA_MAX, delta_bytes};
-use runtime::sub_sample_timing::quantize_step_delta;
+use runtime_contract::sample_run::{SAMPLE_RUN_COUNT_MAX, SAMPLE_RUN_DATA_MAX, delta_bytes};
+use step_shim::quantize::quantize_step_delta;
 use trajectory::{
     AxisChainSet, ClockedMotorSpan, CompiledChain, ContinuousSegment, MotorGroup, MotorSpan,
     MotorTerm, PostProcessorInstance,
@@ -75,7 +75,7 @@ fn bench_chains() -> AxisChainSet {
 }
 
 fn run_pipeline() -> Vec<ContinuousSegment> {
-    let limits = VelocityLimits::try_new(300.0, 4000.0, 8.0, 1_000_000.0).unwrap();
+    let limits = VelocityLimits::try_new(300.0, 4000.0, 8.0, f64::INFINITY).unwrap();
     let cfg = StreamConfig {
         corner: CornerFitConfig::default(),
         integration_tol: 1e-4,

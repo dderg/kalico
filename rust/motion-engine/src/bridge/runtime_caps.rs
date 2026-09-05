@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 
 use host_rt::host_io::McuHostIo;
 use host_rt::mcu_serial_conn::McuSerialConn;
-use runtime::stepping_state::MAX_AXES;
+use runtime_contract::axes::MAX_AXES;
 
 use super::state::McuConnection;
 
@@ -139,7 +139,7 @@ pub(crate) fn collect_motor_positions_inner(
         .iter()
         .find(|c| c.axes.contains(&0usize))
         .map(|c| c.kinematics)
-        .unwrap_or(runtime::segment::KinematicTag::Cartesian as u8);
+        .unwrap_or(motion_core::kinematics::KinematicsKind::Cartesian as u8);
 
     let mut motors: [Option<f64>; MAX_AXES] = [None; MAX_AXES];
     let mut vmotors: [Option<f64>; MAX_AXES] = [None; MAX_AXES];

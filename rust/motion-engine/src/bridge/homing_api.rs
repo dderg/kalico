@@ -353,7 +353,7 @@ impl PyMotionEngine {
             .iter()
             .find(|c| c.axes.contains(&0usize))
             .map(|c| c.kinematics)
-            .unwrap_or(runtime::segment::KinematicTag::Cartesian as u8);
+            .unwrap_or(motion_core::kinematics::KinematicsKind::Cartesian as u8);
         let kin = crate::kinematics::KinematicsModule::from_tag(kin_tag)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let required = required_motor_axes(kin.kind(), axis).map_err(|axis| {

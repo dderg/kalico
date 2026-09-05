@@ -1,7 +1,6 @@
 use crate::lock_ext::LockExt;
 use std::sync::Arc;
 
-use ethercat_rt::buzz::MAX_BUZZ_SLOTS;
 use trajectory::continuous::ProfileError;
 use trajectory::{BuzzProfile, ClockedMotorSpan};
 
@@ -287,10 +286,11 @@ impl BuzzRoute {
                     ));
                 }
                 let motors = endpoint.buzz_slot_count();
-                if motors > MAX_BUZZ_SLOTS {
+                let max_buzz_motors = u8::BITS as usize;
+                if motors > max_buzz_motors {
                     return Err(format!(
                         "resonance buzz: mcu {mcu_id} carries {motors} pulse motors, above the \
-                         {MAX_BUZZ_SLOTS}-motor buzz limit"
+                         {max_buzz_motors}-motor buzz limit"
                     ));
                 }
                 if !endpoint.buzz_complete() {

@@ -1,4 +1,4 @@
-use runtime::stepping_state::MAX_AXES;
+use runtime_contract::axes::MAX_AXES;
 use trajectory::NudgeProfile;
 
 #[cfg(test)]

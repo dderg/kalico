@@ -6,6 +6,7 @@
 )]
 
 use super::*;
+use std::{format, vec::Vec};
 
 #[test]
 fn command_names_are_the_leading_token() {
@@ -31,7 +32,6 @@ fn every_command_is_distinct_and_carries_an_oid() {
     );
 }
 
-#[cfg(feature = "host")]
 #[test]
 fn the_c_header_mirrors_every_argstring() {
     let header = std::fs::read_to_string(

@@ -175,7 +175,7 @@ pub struct Args {
     pub rt_cpu: i32,
     pub rt_prio: i32,
     pub mailbox_cpu: Option<usize>,
-    pub dynamics: Option<crate::dynamics::DynamicsModel>,
+    pub dynamics: Option<ethercat_setpoint::dynamics::DynamicsModel>,
     pub late_tolerance_ns: Option<i64>,
     pub group_delay_ns: u64,
 }
@@ -184,13 +184,17 @@ fn resolve_dynamics(
     slaves: &[SlaveCfg],
     node_profile: Option<String>,
     num_slaves: usize,
-) -> Option<crate::dynamics::DynamicsModel> {
+) -> Option<ethercat_setpoint::dynamics::DynamicsModel> {
     let per_slot: Vec<Option<String>> = slaves.iter().map(|s| s.dynamics_profile.clone()).collect();
-    crate::dynamics::chain_model_from_profiles(node_profile.as_deref(), &per_slot, num_slaves)
-        .unwrap_or_else(|e| {
-            eprintln!("ec-rt: {e}");
-            std::process::exit(1);
-        })
+    ethercat_setpoint::dynamics::chain_model_from_profiles(
+        node_profile.as_deref(),
+        &per_slot,
+        num_slaves,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("ec-rt: {e}");
+        std::process::exit(1);
+    })
 }
 
 impl Args {

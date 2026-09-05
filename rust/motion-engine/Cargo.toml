@@ -17,6 +17,7 @@ crate-type = ["cdylib", "rlib"]
 pyo3 = { version = "0.29", features = ["abi3-py39", "multiple-pymethods"] }
 motion-core = { path = "../motion-core" }
 ethercat-rt = { path = "../ethercat-rt" }
+ethercat-setpoint = { path = "../ethercat-setpoint" }
 motion-services = { path = "../motion-services" }
 host-rt = { path = "../host-rt" }
 mcu-protocol = { path = "../mcu-protocol" }
@@ -24,7 +25,6 @@ trajectory = { path = "../trajectory" }
 geometry = { path = "../geometry" }
 motion-pipeline = { path = "../motion-pipeline" }
 snapshot-core = { path = "../pipeline-snapshot", package = "pipeline-snapshot", optional = true }
-runtime = { path = "../runtime" }
 runtime-contract = { path = "../runtime-contract" }
 config-doc = { path = "../config-doc" }
 planner-config = { path = "../planner-config", features = ["doc"] }

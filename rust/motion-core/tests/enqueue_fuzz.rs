@@ -12,13 +12,13 @@ use geometry::path::{Line, PathSegment, Segment};
 use geometry::{LawSegment, Move, ScalarLaw, SourceRange, VelocityLimits};
 use motion_core::anchor::StreamEpoch;
 use motion_core::enqueue::{EnqueueCtx, enqueue_segment};
+use motion_core::kinematics::KinematicsKind;
 use motion_core::mcu_config::McuAxisConfig;
 use motion_core::pump::{EnqueueMsg, MAX_LEAD_SECS};
 use motion_core::types::AxisKey;
 use nurbs::ScalarNurbs;
 use proptest::prelude::*;
 use proptest::test_runner::FileFailurePersistence;
-use runtime::segment::KinematicTag;
 use step_shim::ring::SEAM_ROUNDING_CYCLES;
 use trajectory::{
     AnalyticMoveSpan, ClockedMotorSpan, ContinuousAxis, ContinuousError, ContinuousSegment,
@@ -256,9 +256,9 @@ impl Scenario {
 
     fn kinematics(&self) -> u8 {
         if self.corexy && self.shapes.len() >= 2 {
-            KinematicTag::CoreXy as u8
+            KinematicsKind::CoreXy as u8
         } else {
-            KinematicTag::Cartesian as u8
+            KinematicsKind::Cartesian as u8
         }
     }
 

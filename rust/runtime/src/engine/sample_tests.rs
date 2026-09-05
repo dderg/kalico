@@ -9,10 +9,10 @@
 use core::sync::atomic::Ordering;
 
 use crate::engine::Engine;
-use crate::sample_run::encode_deltas;
 use crate::state::{NO_HALT_REQUEST, SharedState};
-use crate::stepping_state::{StepMode, StepperBindingRust, TMC_CS_OID_NONE};
+use runtime_contract::axes::{StepMode, StepperBindingRust, TMC_CS_OID_NONE};
 use runtime_contract::error::{FaultCode, RUNTIME_OK};
+use runtime_contract::sample_run::encode_deltas;
 
 const OID: u8 = 7;
 const LANE: usize = 0;

@@ -1,5 +1,6 @@
 pub mod compress;
 pub mod compress_hp;
+pub mod quantize;
 pub mod ring;
 pub mod root_cursor;
 

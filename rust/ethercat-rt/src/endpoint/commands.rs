@@ -5,13 +5,8 @@ use crate::capture::{
     any_slot_out_of_range, CaptureConfig, CaptureDriveConfig, ERR_CAPTURE_BAD_DRIVE_LIST,
 };
 use crate::clock::monotonic_ns;
-use crate::dynamics::{DynamicsModel, ERR_DYNAMICS_BAD_DIM, ERR_DYNAMICS_REJECTED};
 use crate::mailbox::{LimitEntry, MailboxReply, MailboxRequest};
 use crate::sensorless::{ERR_ARM_SENSORLESS_AMBIGUOUS_PAIR, ERR_ARM_SENSORLESS_BAD_THRESHOLD};
-use crate::setpoint::{
-    RunHeader, SetpointEntry, ERR_BUZZ_IN_RING_MODE, ERR_LANE_SLOT_MISMATCH,
-    EXECUTOR_SETPOINT_RING, MAX_FILL_CYCLES, RING_DEPTH_CYCLES,
-};
 use crate::strain_comp::ERR_COMP_BAD_LANE;
 use crate::torque::{CommandAction, TorqueState, ERR_ENABLE_FAILED, ERR_PIECES_WHILE_FAULTED};
 use crate::wire::{
@@ -24,6 +19,11 @@ use crate::wire::{
     set_dynamics_model_response_frame, set_ff_lead_response_frame, set_strain_comp_response_frame,
     set_torque_response_frame, start_capture_response_frame, stepper_suppress_response_frame,
     stop_capture_response_frame, stop_response_frame, Command,
+};
+use ethercat_setpoint::dynamics::{DynamicsModel, ERR_DYNAMICS_BAD_DIM, ERR_DYNAMICS_REJECTED};
+use ethercat_setpoint::setpoint::{
+    RunHeader, SetpointEntry, ERR_BUZZ_IN_RING_MODE, ERR_LANE_SLOT_MISMATCH,
+    EXECUTOR_SETPOINT_RING, MAX_FILL_CYCLES, RING_DEPTH_CYCLES,
 };
 use mcu_protocol::messages::{
     ArmSensorlessEndstop, LaneRun, PushSampleRuns, ResonanceBuzz, SdoRead, SdoReadResponse,
@@ -974,10 +974,10 @@ pub(super) fn handle_set_dynamics_model(
         );
         ERR_DYNAMICS_BAD_DIM
     } else {
-        let pairs: Vec<crate::dynamics::PairSpec> = msg
+        let pairs: Vec<ethercat_setpoint::dynamics::PairSpec> = msg
             .pairs
             .iter()
-            .map(|pair| crate::dynamics::PairSpec {
+            .map(|pair| ethercat_setpoint::dynamics::PairSpec {
                 first: pair.first as usize,
                 second: pair.second as usize,
                 direction_split: pair.direction_split,
@@ -1083,7 +1083,8 @@ fn handle_query_motor_state(ctx: &mut EndpointCtx, correlation_id: u32) {
                 (ctx.drive.position_actual(s), ctx.drive.velocity_actual(s));
             let delta_counts = i64::from(pos_counts) - i64::from(anchor_counts);
             let pos_mm = anchor_mm + delta_counts as f64 / ctx.cmd_counts_per_mm[s];
-            let vel_mm_s = crate::scale::velocity_mm_s(vel_counts_s, ctx.cmd_counts_per_mm[s]);
+            let vel_mm_s =
+                ethercat_setpoint::scale::velocity_mm_s(vel_counts_s, ctx.cmd_counts_per_mm[s]);
             Some((s as u8, pos_mm, vel_mm_s))
         })
         .collect();

@@ -476,7 +476,7 @@ fn serve_one_grid_reply(
 fn grid_reply_with_zero_depth(cid: u32) -> Vec<u8> {
     ethercat_rt::wire::sample_grid_response_frame(
         cid,
-        ethercat_rt::setpoint::EXECUTOR_SETPOINT_RING,
+        ethercat_setpoint::setpoint::EXECUTOR_SETPOINT_RING,
         250_000,
         0,
         (42, 10_500_000),
