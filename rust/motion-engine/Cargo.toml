@@ -18,6 +18,7 @@ pyo3 = { version = "0.29", features = ["abi3-py39", "multiple-pymethods"] }
 motion-core = { path = "../motion-core" }
 ethercat-rt = { path = "../ethercat-rt" }
 ethercat-setpoint = { path = "../ethercat-setpoint" }
+ethercat-setpoint-fill = { path = "../ethercat-setpoint-fill" }
 motion-services = { path = "../motion-services" }
 host-rt = { path = "../host-rt" }
 mcu-protocol = { path = "../mcu-protocol" }
@@ -35,7 +36,6 @@ serde_json = "1"
 thiserror = { workspace = true }
 
 [features]
-test-support = ["motion-core/test-support"]
 snapshot = ["dep:snapshot-core"]
 # extension-module leaves libpython symbols undefined (resolved by the host
 # process). Test binaries are standalone executables and MUST NOT enable it,
@@ -45,12 +45,7 @@ extension-module = ["pyo3/extension-module"]
 
 [dev-dependencies]
 mcu-transport = { path = "../mcu-transport" }
-# Enables McuHostIo::from_port_skip_identify for the teardown tests
-# (engine/tests.rs). Cargo unions this with the normal-dep feature set when
-# building tests, so the production cdylib build is unaffected.
 host-rt = { path = "../host-rt", features = ["test-harness"] }
-motion-engine = { path = ".", features = ["test-support"] }
-motion-core = { path = "../motion-core", features = ["test-support"] }
 serialport = "4"
 
 [lints]

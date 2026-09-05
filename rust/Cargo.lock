@@ -323,6 +323,7 @@ dependencies = [
  "cc",
  "crossbeam-channel",
  "ethercat-setpoint",
+ "ethercat-setpoint-fill",
  "host-rt",
  "libc",
  "libm",
@@ -344,10 +345,17 @@ dependencies = [
 name = "ethercat-setpoint"
 version = "0.1.0"
 dependencies = [
- "mcu-protocol",
  "runtime-contract",
  "serde",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "ethercat-setpoint-fill"
+version = "0.1.0"
+dependencies = [
+ "ethercat-setpoint",
+ "mcu-protocol",
  "trajectory",
 ]
 
@@ -683,6 +691,7 @@ dependencies = [
  "crossbeam-channel",
  "ethercat-rt",
  "ethercat-setpoint",
+ "ethercat-setpoint-fill",
  "gcode",
  "geometry",
  "host-rt",
@@ -709,13 +718,13 @@ dependencies = [
  "crossbeam-channel",
  "ethercat-rt",
  "ethercat-setpoint",
+ "ethercat-setpoint-fill",
  "geometry",
  "host-rt",
  "libc",
  "mcu-protocol",
  "mcu-transport",
  "motion-core",
- "motion-engine",
  "motion-pipeline",
  "motion-services",
  "pipeline-snapshot",

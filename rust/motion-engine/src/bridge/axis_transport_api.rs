@@ -1,14 +1,14 @@
 use super::{PyMotionEngine, PyResult, PyRuntimeError, Python, pymethods};
-use crate::axis_transport::{TRANSPORT_PHASE, TRANSPORT_PULSE, transport_name};
-use crate::lock_ext::LockExt;
-use crate::types::AxisKey;
+use motion_core::axis_transport::{TRANSPORT_PHASE, TRANSPORT_PULSE, transport_name};
+use motion_core::lock_ext::LockExt;
+use motion_core::types::AxisKey;
 use std::sync::Arc;
 
 /// One transport's side of a handover: read the position it actually executed,
 /// and hand a position back to the transport taking over.
 enum Side {
-    Pulse(Arc<std::sync::Mutex<crate::pump::StepcompressEndpoint>>),
-    Phase(Arc<std::sync::Mutex<crate::pump::SampleEndpoint>>),
+    Pulse(Arc<std::sync::Mutex<motion_core::pump::StepcompressEndpoint>>),
+    Phase(Arc<std::sync::Mutex<motion_core::pump::SampleEndpoint>>),
 }
 
 impl Side {

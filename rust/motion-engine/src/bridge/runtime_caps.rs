@@ -1,5 +1,5 @@
-use crate::kinematics::KinematicsModule;
-use crate::lock_ext::LockExt;
+use motion_core::kinematics::KinematicsModule;
+use motion_core::lock_ext::LockExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -122,7 +122,7 @@ pub(crate) fn place_motor_response(
 }
 
 pub(crate) fn collect_motor_positions_inner(
-    mcu_axis_configs: &Mutex<Vec<crate::mcu_config::McuAxisConfig>>,
+    mcu_axis_configs: &Mutex<Vec<motion_core::mcu_config::McuAxisConfig>>,
     mcus: &Mutex<HashMap<u32, McuConnection>>,
     timeout: std::time::Duration,
 ) -> Result<HashMap<String, (f64, f64)>, String> {

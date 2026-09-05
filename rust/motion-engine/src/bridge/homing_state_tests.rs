@@ -1,7 +1,7 @@
 use super::endstop::{TripMatch, match_trip};
 use super::homing_api::validate_trip_members;
 use super::{HomingRun, HomingState, RemoteFreeze, TripMember};
-use crate::lock_ext::LockExt;
+use motion_core::lock_ext::LockExt;
 use std::sync::atomic::Ordering;
 
 const MCU: u32 = 3;
@@ -90,11 +90,11 @@ fn run_with(members: Vec<TripMember>) -> HomingRun {
     HomingRun {
         cohort: 1,
         remaining_trips: members,
-        axis_key: crate::types::AxisKey {
+        axis_key: motion_core::types::AxisKey {
             mcu_id: MCU,
             axis: 0,
         },
-        all_axis_keys: vec![crate::types::AxisKey {
+        all_axis_keys: vec![motion_core::types::AxisKey {
             mcu_id: MCU,
             axis: 0,
         }],

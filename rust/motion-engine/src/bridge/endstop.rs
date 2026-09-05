@@ -1,4 +1,4 @@
-use crate::lock_ext::LockExt;
+use motion_core::lock_ext::LockExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -10,14 +10,14 @@ use super::{
 #[derive(Clone)]
 pub(super) struct TripDeps {
     pub(super) homing: Arc<HomingState>,
-    pub(super) pump_tx: Arc<Mutex<Option<crossbeam_channel::Sender<crate::pump::PumpMsg>>>>,
+    pub(super) pump_tx: Arc<Mutex<Option<crossbeam_channel::Sender<motion_core::pump::PumpMsg>>>>,
     pub(super) mcus: Arc<Mutex<HashMap<u32, McuConnection>>>,
     pub(super) router: Arc<Mutex<PassthroughRouter>>,
-    pub(super) motion_history: Arc<Mutex<crate::motion_history::HistoryStore>>,
+    pub(super) motion_history: Arc<Mutex<motion_core::motion_history::HistoryStore>>,
     pub(super) mcu_axis_configs: Arc<Mutex<Vec<McuAxisConfig>>>,
     pub(super) stepcompress_endpoints:
-        Arc<Mutex<HashMap<u32, Arc<Mutex<crate::pump::StepcompressEndpoint>>>>>,
-    pub(super) axis_transports: Arc<crate::axis_transport::AxisTransports>,
+        Arc<Mutex<HashMap<u32, Arc<Mutex<motion_core::pump::StepcompressEndpoint>>>>>,
+    pub(super) axis_transports: Arc<motion_core::axis_transport::AxisTransports>,
 }
 
 impl McuConnection {
@@ -41,7 +41,7 @@ impl TripDeps {
             .and_then(McuConnection::homing_transport)
     }
 
-    fn step_count(&self, lane: &crate::homing::StepcompressLane) -> Result<i64, String> {
+    fn step_count(&self, lane: &motion_core::homing::StepcompressLane) -> Result<i64, String> {
         let io = self
             .mcus
             .lock_ok()
@@ -168,13 +168,15 @@ pub(super) fn dispatch_endstop_trip(
                             let reference = deps
                                 .router
                                 .lock_ok()
-                                .compute_ack_clock(crate::types::mcu_handle_from_raw(
+                                .compute_ack_clock(motion_core::types::mcu_handle_from_raw(
                                     freeze.motor_mcu,
                                 ))
                                 .unwrap_or(0);
                             suppression_clock = Some((
                                 freeze.motor_mcu,
-                                crate::remote_trigger::relay_trip_clock(clock32, reference),
+                                motion_services::remote_trigger::relay_trip_clock(
+                                    clock32, reference,
+                                ),
                             ));
                         }
                         Err(e) => {
@@ -193,10 +195,10 @@ pub(super) fn dispatch_endstop_trip(
                 }
             }
             if let Some(tx) = pump_tx_opt.as_ref() {
-                let _ = tx.send(crate::pump::PumpMsg::DripDisarm(run.cohort));
+                let _ = tx.send(motion_core::pump::PumpMsg::DripDisarm(run.cohort));
                 let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
                 if tx
-                    .send(crate::pump::PumpMsg::Halt {
+                    .send(motion_core::pump::PumpMsg::Halt {
                         keys: run.all_axis_keys.clone(),
                         ack: ack_tx,
                     })
@@ -220,7 +222,7 @@ pub(super) fn dispatch_endstop_trip(
                     .map_err(|e| format!("Stop decode failed for mcu {mcu_id}: {e:?}"))
             };
 
-            let discard_clock = match crate::homing::broadcast_stop(
+            let discard_clock = match motion_core::homing::broadcast_stop(
                 &stepper_mcu_ids,
                 run.axis_key.mcu_id,
                 stop_call,
@@ -241,7 +243,7 @@ pub(super) fn dispatch_endstop_trip(
             let run_start = run.start_pos;
             let reconstruct_cartesian =
                 |source_mcu: u32, clock: u64| -> Result<geometry::MachinePos, String> {
-                    crate::homing::reconstruct_cartesian_position(
+                    motion_core::homing::reconstruct_cartesian_position(
                         source_mcu,
                         clock,
                         &configs,
@@ -253,7 +255,7 @@ pub(super) fn dispatch_endstop_trip(
                 };
 
             let reseed_step_counter =
-                |lane: &crate::homing::StepcompressLane, count: i64| -> Result<(), String> {
+                |lane: &motion_core::homing::StepcompressLane, count: i64| -> Result<(), String> {
                     let endpoint = deps
                         .stepcompress_endpoints
                         .lock_ok()
@@ -272,13 +274,13 @@ pub(super) fn dispatch_endstop_trip(
 
             let (final_source_mcu, final_clock) =
                 suppression_clock.unwrap_or((axis_key.mcu_id, discard_clock));
-            let lane_starts = crate::mcu_config::reanchor_axis_targets(&configs, run_start);
+            let lane_starts = motion_core::mcu_config::reanchor_axis_targets(&configs, run_start);
             let outcome = reconstruct_cartesian(event_mcu, trip_clock).and_then(|trip| {
-                crate::homing::reconcile_stepcompress_lanes(
+                motion_core::homing::reconcile_stepcompress_lanes(
                     &configs,
                     &deps.axis_transports,
                     |key| {
-                        crate::homing::reconstruct_axis_position(
+                        motion_core::homing::reconstruct_axis_position(
                             final_source_mcu,
                             final_clock,
                             key,
@@ -324,10 +326,12 @@ pub(super) fn dispatch_endstop_trip(
                     }
                 }
                 if let Some(tx) = pump_tx_opt.as_ref() {
-                    tx.send(crate::pump::PumpMsg::Resume(run.all_axis_keys.clone()))
-                        .map_err(|_| "EndstopTrip: pump channel closed before resume")?;
+                    tx.send(motion_core::pump::PumpMsg::Resume(
+                        run.all_axis_keys.clone(),
+                    ))
+                    .map_err(|_| "EndstopTrip: pump channel closed before resume")?;
                     let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
-                    tx.send(crate::pump::PumpMsg::Barrier(ack_tx))
+                    tx.send(motion_core::pump::PumpMsg::Barrier(ack_tx))
                         .map_err(|_| "EndstopTrip: pump channel closed before resume barrier")?;
                     ack_rx.recv_timeout(Duration::from_secs(1)).map_err(|_| {
                         "EndstopTrip: pump did not acknowledge resume after endpoint ResumeStream"
@@ -352,7 +356,7 @@ pub(super) fn dispatch_endstop_trip(
 }
 
 fn cut_frozen_motor_stream(deps: &TripDeps, freeze: RemoteFreeze) -> Result<(), String> {
-    let lane = crate::homing::stepcompress_lane_of_oid(
+    let lane = motion_core::homing::stepcompress_lane_of_oid(
         &deps.mcu_axis_configs.lock_ok(),
         freeze.motor_mcu,
         freeze.stepper_oid,
@@ -434,8 +438,8 @@ fn finish_partial_work(deps: &TripDeps, cohort: u64, error: Option<String>) {
     let terminal = deps.homing.retire_partial(cohort, error);
     if let Some(run) = terminal {
         if let Some(tx) = deps.pump_tx.lock_ok().clone() {
-            let _ = tx.send(crate::pump::PumpMsg::Flush(run.all_axis_keys));
-            let _ = tx.send(crate::pump::PumpMsg::DripDisarm(cohort));
+            let _ = tx.send(motion_core::pump::PumpMsg::Flush(run.all_axis_keys));
+            let _ = tx.send(motion_core::pump::PumpMsg::DripDisarm(cohort));
         }
         deps.homing
             .complete(cohort, Err("partial homing freeze failed".into()));

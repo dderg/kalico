@@ -270,7 +270,7 @@ fn log_dispatch(seg: &ContinuousSegment) {
         subsystem = "motion",
         event = "pipe_dispatch",
         line = seg.source_line,
-        t_us = crate::timing::mono_us(),
+        t_us = motion_pipeline::timing::mono_us(),
         seg_t_start = seg.t_start,
         seg_t_end = seg.t_end,
         x_end = end_of(0),

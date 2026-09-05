@@ -1,4 +1,4 @@
-use crate::lock_ext::LockExt;
+use motion_core::lock_ext::LockExt;
 use std::os::unix::io::FromRawFd;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, Weak};
 use host_rt::host_io::{McuHostIo, McuHostIoConfig};
 use host_rt::mcu_serial_conn::McuSerialConn;
 
-use crate::config::PlannerConfig;
-use crate::worker::{DispatchError, StreamWorkerHandle};
+use motion_core::worker::{DispatchError, StreamWorkerHandle};
+use planner_config::PlannerConfig;
 use trajectory::{ContinuousSegment, NudgeProfile};
 
 use super::{McuConnection, PyMotionEngine, SampleGrid};
@@ -79,14 +79,14 @@ fn mcus_is_empty(engine: &PyMotionEngine) -> bool {
 }
 
 fn seed_pump_thread(engine: &PyMotionEngine) -> Arc<std::sync::atomic::AtomicBool> {
-    let (tx, rx) = crossbeam_channel::unbounded::<crate::pump::PumpMsg>();
+    let (tx, rx) = crossbeam_channel::unbounded::<motion_core::pump::PumpMsg>();
     let exited = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let exited_thread = Arc::clone(&exited);
     let handle = std::thread::Builder::new()
         .name("push-pieces-pump".into())
         .spawn(move || {
             for msg in rx {
-                if matches!(msg, crate::pump::PumpMsg::Shutdown) {
+                if matches!(msg, motion_core::pump::PumpMsg::Shutdown) {
                     break;
                 }
             }
@@ -236,7 +236,7 @@ fn double_shutdown_is_safe() {
 /// Closure-backed [`SegmentSink`] for tests; nudges are accepted and dropped.
 struct FnSink<F>(F);
 
-impl<F> crate::worker::SegmentSink for FnSink<F>
+impl<F> motion_core::worker::SegmentSink for FnSink<F>
 where
     F: FnMut(&ContinuousSegment) -> Result<(), DispatchError> + Send + 'static,
 {
@@ -254,7 +254,7 @@ where
     }
 }
 
-fn counting_dispatch() -> (impl crate::worker::SegmentSink, Arc<AtomicUsize>) {
+fn counting_dispatch() -> (impl motion_core::worker::SegmentSink, Arc<AtomicUsize>) {
     let counter = Arc::new(AtomicUsize::new(0));
     let c = Arc::clone(&counter);
     let sink = FnSink(move |_seg: &ContinuousSegment| {
@@ -289,7 +289,7 @@ fn stream_config_from(cfg: &PlannerConfig) -> (motion_pipeline::StreamConfig, Ve
 }
 
 fn heartbeat_supervisor(
-    pump_tx: crossbeam_channel::Sender<crate::pump::PumpMsg>,
+    pump_tx: crossbeam_channel::Sender<motion_core::pump::PumpMsg>,
 ) -> super::pipeline_setup::EthercatHeartbeatSupervisor {
     super::pipeline_setup::EthercatHeartbeatSupervisor {
         mcu_id: 2,
@@ -299,14 +299,14 @@ fn heartbeat_supervisor(
         pump_tx,
         slot_axes: vec![0, 1],
         filler: Arc::new(Mutex::new(
-            ethercat_setpoint::setpoint_fill::ChainFiller::new(
+            ethercat_setpoint_fill::setpoint_fill::ChainFiller::new(
                 &[
-                    ethercat_setpoint::setpoint_fill::LaneSpec {
+                    ethercat_setpoint_fill::setpoint_fill::LaneSpec {
                         axis: 0,
                         cmd_counts_per_mm: 1000.0,
                         ff_lead_ns: 0,
                     },
-                    ethercat_setpoint::setpoint_fill::LaneSpec {
+                    ethercat_setpoint_fill::setpoint_fill::LaneSpec {
                         axis: 1,
                         cmd_counts_per_mm: 1000.0,
                         ff_lead_ns: 0,
@@ -344,7 +344,7 @@ fn every_fault_free_retirement_heartbeat_reaches_the_pump() {
         heartbeats,
         "heartbeats must forward 1:1 without time-based coalescing"
     );
-    let crate::pump::PumpMsg::Heartbeat(last) = forwarded.last().unwrap() else {
+    let motion_core::pump::PumpMsg::Heartbeat(last) = forwarded.last().unwrap() else {
         panic!("supervisor forwards PumpMsg::Heartbeat");
     };
     assert_eq!(last.consumed_counts, Some(vec![0, 0]));
@@ -374,7 +374,7 @@ fn fault_heartbeat_is_latched_not_forwarded() {
 }
 
 fn post_processor_engine() -> PyMotionEngine {
-    use crate::config::{AxisRegistry, PostProcessorDecl, PostProcessorSet};
+    use planner_config::{AxisRegistry, PostProcessorDecl, PostProcessorSet};
 
     let engine = PyMotionEngine::new();
     let mut cfg = engine.planner_config.lock_ok();
@@ -545,7 +545,7 @@ fn shutdown_takes_and_joins_planner() {
 fn shutdown_stops_new_dispatch_before_closing_pump() {
     let engine = PyMotionEngine::new();
 
-    let (pump_tx, pump_rx) = crossbeam_channel::unbounded::<crate::pump::PumpMsg>();
+    let (pump_tx, pump_rx) = crossbeam_channel::unbounded::<motion_core::pump::PumpMsg>();
     let pump_tx_for_engine = pump_tx.clone();
 
     let saw_pump_gone = Arc::new(AtomicBool::new(false));
@@ -554,12 +554,12 @@ fn shutdown_stops_new_dispatch_before_closing_pump() {
     let dispatch_count_cb = Arc::clone(&dispatch_count);
     let dispatch = FnSink(move |_seg: &ContinuousSegment| {
         dispatch_count_cb.fetch_add(1, Ordering::SeqCst);
-        let hb = crate::pump::PumpMsg::Heartbeat(crate::pump::HeartbeatMsg {
+        let hb = motion_core::pump::PumpMsg::Heartbeat(motion_core::pump::HeartbeatMsg {
             mcu_id: 0,
             axes: Vec::new(),
             consumed_counts: None,
             retired_counts: Vec::new(),
-            retired_by: crate::pump::RetiredBy::Pulse,
+            retired_by: motion_core::pump::RetiredBy::Pulse,
         });
         if pump_tx.send(hb).is_err() {
             saw_pump_gone_cb.store(true, Ordering::SeqCst);
@@ -578,7 +578,7 @@ fn shutdown_stops_new_dispatch_before_closing_pump() {
     );
     planner
         .submit_move(
-            crate::classify::build_move(
+            motion_core::classify::build_move(
                 [0.0; 3],
                 [50.0, 0.0, 0.0],
                 0,
@@ -597,7 +597,7 @@ fn shutdown_stops_new_dispatch_before_closing_pump() {
         .name("push-pieces-pump".into())
         .spawn(move || {
             for msg in &pump_rx {
-                if matches!(msg, crate::pump::PumpMsg::Shutdown) {
+                if matches!(msg, motion_core::pump::PumpMsg::Shutdown) {
                     break;
                 }
             }
@@ -620,7 +620,7 @@ fn shutdown_stops_new_dispatch_before_closing_pump() {
                     let Some(p) = guard.as_ref() else {
                         break; // shutdown() took the planner; stop submitting.
                     };
-                    let m = crate::classify::build_move(
+                    let m = motion_core::classify::build_move(
                         start,
                         [50.0, 0.0, 0.0],
                         0,
@@ -665,7 +665,7 @@ fn shutdown_stops_new_dispatch_before_closing_pump() {
 #[test]
 fn shutdown_unblocks_dispatch_waiting_on_full_pump_data_channel() {
     let engine = Arc::new(PyMotionEngine::new());
-    let (pump_tx, pump_rx) = crossbeam_channel::unbounded::<crate::pump::PumpMsg>();
+    let (pump_tx, pump_rx) = crossbeam_channel::unbounded::<motion_core::pump::PumpMsg>();
     let (data_tx, data_rx) = crossbeam_channel::bounded::<()>(1);
     data_tx.send(()).unwrap();
 
@@ -688,7 +688,7 @@ fn shutdown_unblocks_dispatch_waiting_on_full_pump_data_channel() {
     );
     planner
         .submit_move(
-            crate::classify::build_move(
+            motion_core::classify::build_move(
                 [0.0; 3],
                 [50.0, 0.0, 0.0],
                 0,
@@ -704,7 +704,7 @@ fn shutdown_unblocks_dispatch_waiting_on_full_pump_data_channel() {
 
     let pump_handle = std::thread::spawn(move || {
         while let Ok(msg) = pump_rx.recv() {
-            if matches!(msg, crate::pump::PumpMsg::Shutdown) {
+            if matches!(msg, motion_core::pump::PumpMsg::Shutdown) {
                 break;
             }
         }
@@ -735,8 +735,8 @@ fn shutdown_does_not_abort_on_detached_ethercat_weak() {
     use std::time::Duration;
     use trajectory::{ClockedMotorSpan, ContinuousAxis, MotorGroup, MotorSpan, MotorTerm};
 
-    use crate::pump::{EnqueueMsg, EtherCatRing, PumpCallbacks, PumpMsg, WireSink, run_pump};
-    use crate::types::AxisKey;
+    use motion_core::pump::{EnqueueMsg, EtherCatRing, PumpCallbacks, PumpMsg, WireSink, run_pump};
+    use motion_core::types::AxisKey;
 
     const EC_MCU_ID: u32 = 42;
 
@@ -746,9 +746,9 @@ fn shutdown_does_not_abort_on_detached_ethercat_weak() {
     let fatal_fired = Arc::new(AtomicBool::new(false));
     let fatal_flag = Arc::clone(&fatal_fired);
 
-    let ring: crate::pump::RingFiller = Arc::new(std::sync::Mutex::new(
-        ethercat_setpoint::setpoint_fill::ChainFiller::new(
-            &[ethercat_setpoint::setpoint_fill::LaneSpec {
+    let ring: motion_core::pump::RingFiller = Arc::new(std::sync::Mutex::new(
+        ethercat_setpoint_fill::setpoint_fill::ChainFiller::new(
+            &[ethercat_setpoint_fill::setpoint_fill::LaneSpec {
                 axis: 0,
                 cmd_counts_per_mm: 1_000.0,
                 ff_lead_ns: 0,
@@ -761,7 +761,9 @@ fn shutdown_does_not_abort_on_detached_ethercat_weak() {
     let sink = WireSink {
         stepcompress: HashMap::new(),
         samples: HashMap::new(),
-        transports: Arc::new(crate::axis_transport::AxisTransports::from_configs(&[])),
+        transports: Arc::new(motion_core::axis_transport::AxisTransports::from_configs(
+            &[],
+        )),
         ethercat: HashMap::from([(
             EC_MCU_ID,
             EtherCatRing {
@@ -792,7 +794,7 @@ fn shutdown_does_not_abort_on_detached_ethercat_weak() {
                     ..PumpCallbacks::noop(256)
                 },
                 None,
-                std::sync::Arc::new(crate::drain::DrainLedger::new()),
+                std::sync::Arc::new(motion_core::drain::DrainLedger::new()),
                 Arc::new(AtomicU64::new(0)),
             );
         })
@@ -910,8 +912,8 @@ fn register_ethercat_mcu_seeds_nominal_clock_freq() {
             grid_clock: 10_500_000,
         },
         std::sync::Arc::new(std::sync::Mutex::new(
-            ethercat_setpoint::setpoint_fill::ChainFiller::new(
-                &[ethercat_setpoint::setpoint_fill::LaneSpec {
+            ethercat_setpoint_fill::setpoint_fill::ChainFiller::new(
+                &[ethercat_setpoint_fill::setpoint_fill::LaneSpec {
                     axis: 0,
                     cmd_counts_per_mm: 1_000.0,
                     ff_lead_ns: 0,

@@ -8,7 +8,7 @@ use std::time::Instant;
 use host_rt::host_io::McuHostIo;
 use host_rt::mcu_serial_conn::McuSerialConn;
 
-use crate::lock_ext::LockExt;
+use motion_core::lock_ext::LockExt;
 
 type HomingResult = Result<(geometry::MachinePos, geometry::MachinePos, u64), String>;
 
@@ -140,8 +140,8 @@ impl HomingState {
             }
         };
         if mcu.is_some_and(|mcu| {
-            crate::homing::route_drive_fault(mcu, Some(axis_mcu))
-                != crate::homing::DriveFaultRoute::HomingError
+            motion_core::homing::route_drive_fault(mcu, Some(axis_mcu))
+                != motion_core::homing::DriveFaultRoute::HomingError
         }) {
             return None;
         }
@@ -297,11 +297,11 @@ impl Default for FlushState {
 /// `shutdown`.
 #[derive(Default)]
 pub(crate) struct PumpHandles {
-    pub(crate) tx: Arc<Mutex<Option<crossbeam_channel::Sender<crate::pump::PumpMsg>>>>,
+    pub(crate) tx: Arc<Mutex<Option<crossbeam_channel::Sender<motion_core::pump::PumpMsg>>>>,
     pub(crate) thread: Mutex<Option<JoinHandle<()>>>,
     pub(crate) backlog: Arc<AtomicU64>,
-    pub(crate) pacer: Mutex<Option<crate::pump::StepcompressPacer>>,
-    pub(crate) sample_pacer: Mutex<Option<crate::pump::SamplePacer>>,
+    pub(crate) pacer: Mutex<Option<motion_core::pump::StepcompressPacer>>,
+    pub(crate) sample_pacer: Mutex<Option<motion_core::pump::SamplePacer>>,
 }
 
 /// The background live-position poller's cache, join handle, and stop flag —
@@ -352,8 +352,8 @@ pub(crate) struct RemoteFreeze {
 pub(crate) struct HomingRun {
     pub(crate) cohort: u64,
     pub(crate) remaining_trips: Vec<TripMember>,
-    pub(crate) axis_key: crate::types::AxisKey,
-    pub(crate) all_axis_keys: Vec<crate::types::AxisKey>,
+    pub(crate) axis_key: motion_core::types::AxisKey,
+    pub(crate) all_axis_keys: Vec<motion_core::types::AxisKey>,
     pub(crate) window_start_host: f64,
     pub(crate) start_pos: geometry::MachinePos,
 }
@@ -375,7 +375,7 @@ pub(crate) struct McuConnection {
     /// The pump's setpoint filler for this endpoint, built at claim time
     /// because that is where the drives' command scale and the dynamics
     /// profile are still in hand. Only an EtherCAT connection has one.
-    pub(crate) ring_filler: Option<crate::pump::RingFiller>,
+    pub(crate) ring_filler: Option<motion_core::pump::RingFiller>,
 }
 
 /// One EtherCAT drive slot as `[ethercat_node]` declares it in klippy. The

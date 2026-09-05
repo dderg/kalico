@@ -479,7 +479,7 @@ impl SegmentSink for PumpSink {
             subsystem = "motion",
             event = "pipe_pump_in",
             line = seg.source_line,
-            t_us = crate::timing::mono_us(),
+            t_us = motion_pipeline::timing::mono_us(),
             "[pipe] handed to pump"
         );
 

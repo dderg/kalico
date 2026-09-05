@@ -44,6 +44,7 @@ rtrb = "0.3.4"
 cc = "1"                                            # compiles csrc/libecrt_igh.c under `hw`
 
 [dev-dependencies]
+ethercat-setpoint-fill = { path = "../ethercat-setpoint-fill" }
 trajectory = { path = "../trajectory" }
 host-rt = { path = "../host-rt" }
 parking_lot = "0.12"

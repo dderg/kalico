@@ -229,7 +229,7 @@ impl Ingress {
             subsystem = "motion",
             event = "pipe_ingress",
             line = m.source.start_line,
-            t_us = crate::timing::mono_us(),
+            t_us = motion_pipeline::timing::mono_us(),
             "[pipe] ingress"
         );
         if let Some(seg) = &m.segment.spatial {
@@ -276,7 +276,7 @@ impl Ingress {
         tracing::debug!(
             subsystem = "motion",
             event = "pipe_drain",
-            t_us = crate::timing::mono_us(),
+            t_us = motion_pipeline::timing::mono_us(),
             "[pipe] runway exhausted — draining pipeline to rest"
         );
         self.drain_and_fence();

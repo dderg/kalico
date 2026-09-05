@@ -25,9 +25,9 @@ use mcu_protocol::messages::{LaneRun, SetpointSample, LANE_RUN_FLAG_REANCHOR, LA
 use trajectory::ClockedMotorSpan;
 
 use crate::buzz::{BuzzOsc, MAX_BUZZ_SLOTS};
-use crate::dynamics::DynamicsModel;
-use crate::scale::mm_to_counts;
-use crate::setpoint::MAX_FILL_CYCLES;
+use ethercat_setpoint::dynamics::DynamicsModel;
+use ethercat_setpoint::scale::mm_to_counts;
+use ethercat_setpoint::setpoint::MAX_FILL_CYCLES;
 
 /// The DC grid is stamped in nanoseconds, so a span's clock map must tick at
 /// 1 GHz for its clocks to be this grid's clocks.

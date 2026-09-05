@@ -3,17 +3,17 @@ use super::{
     McuAxisConfig, McuConnection, McuHostIo, McuSerialConn, McuTopologyInput, Mutex,
     PyMotionEngine, PyResult, PyRuntimeError, PyValueError, STREAM_INTEGRATION_TOL,
     STREAM_MAX_BUFFER_MOVES, abort_after_tracing_appender_drains, arm_endpoint_death_watchdog,
-    build_mcu_configs, collect_motor_positions_inner, config, dispatch_endstop_trip,
-    mcu_handle_from_raw, query_ethercat_runtime_caps, report_endpoint_death,
+    build_mcu_configs, collect_motor_positions_inner, dispatch_endstop_trip, mcu_handle_from_raw,
+    query_ethercat_runtime_caps, report_endpoint_death,
 };
-use crate::lock_ext::LockExt;
+use motion_core::lock_ext::LockExt;
 fn escalate_endpoint_death(latch: &Arc<Mutex<HashMap<u32, String>>>, mcu_id: u32, reason: &str) {
     if report_endpoint_death(latch, mcu_id, reason) {
         arm_endpoint_death_watchdog(Arc::clone(latch), mcu_id);
     }
 }
 
-fn log_abandoned_spans(key: crate::types::AxisKey, dropped: u32) {
+fn log_abandoned_spans(key: motion_core::types::AxisKey, dropped: u32) {
     tracing::warn!(
         subsystem = "motion",
         event = "pump_abandon",
@@ -45,7 +45,7 @@ pub(super) fn require_unlimited_config_jerk(max_jerk: f64) -> Result<(), &'stati
 }
 
 pub(super) fn build_stream_config(
-    cfg: &config::PlannerConfig,
+    cfg: &planner_config::PlannerConfig,
 ) -> PyResult<motion_pipeline::StreamConfig> {
     let cart = cfg.cartesian;
     require_unlimited_config_jerk(cart.max_jerk).map_err(PyValueError::new_err)?;
@@ -111,7 +111,7 @@ impl PyMotionEngine {
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         *self.mcu_axis_configs.lock_ok() = mcu_configs.clone();
         *self.axis_transports.lock_ok() = Arc::new(
-            crate::axis_transport::AxisTransports::from_configs(&mcu_configs),
+            motion_core::axis_transport::AxisTransports::from_configs(&mcu_configs),
         );
 
         Ok((ec_conns, mcu_configs))
@@ -156,7 +156,7 @@ impl PyMotionEngine {
 
     pub(super) fn seed_ethercat_clock_estimates(&self, ethercat_mcu_ids: &HashSet<u32>) {
         let mut router = self.router.lock_ok();
-        let now_ns = crate::timing::monotonic_ns();
+        let now_ns = motion_pipeline::timing::monotonic_ns();
         for &mcu_id in ethercat_mcu_ids {
             let mcu_h = mcu_handle_from_raw(mcu_id);
             let _ = router.set_clock_est_from_sample(
@@ -181,10 +181,10 @@ impl PyMotionEngine {
         mcu_configs: &[McuAxisConfig],
         host_ios: &HashMap<u32, Arc<McuHostIo>>,
         ec_conns: &HashMap<u32, Arc<McuSerialConn>>,
-        pump_control: &crossbeam_channel::Sender<crate::pump::PumpMsg>,
-    ) -> PyResult<crate::worker::PumpResources> {
+        pump_control: &crossbeam_channel::Sender<motion_core::pump::PumpMsg>,
+    ) -> PyResult<motion_core::worker::PumpResources> {
         let router_for_clock = Arc::clone(&self.router);
-        let clock_of: crate::pump::ClockSource = Arc::new(move |mcu_id: u32| {
+        let clock_of: motion_core::pump::ClockSource = Arc::new(move |mcu_id: u32| {
             let r = router_for_clock.lock_ok();
             r.ack_clock_and_freq(mcu_handle_from_raw(mcu_id))
         });
@@ -193,7 +193,7 @@ impl PyMotionEngine {
         let mut stepcompress = HashMap::new();
         let mut samples = HashMap::new();
         let mut ethercat = HashMap::new();
-        let mut ring_depth_table: HashMap<crate::types::AxisKey, [u32; 2]> = HashMap::new();
+        let mut ring_depth_table: HashMap<motion_core::types::AxisKey, [u32; 2]> = HashMap::new();
         let mut paced_step = Vec::new();
         let mut paced_sample = Vec::new();
 
@@ -229,7 +229,7 @@ impl PyMotionEngine {
             };
             for &axis in &cfg.axes {
                 ring_depth_table.insert(
-                    crate::types::AxisKey {
+                    motion_core::types::AxisKey {
                         mcu_id: cfg.mcu_id,
                         axis: axis as u8,
                     },
@@ -238,7 +238,7 @@ impl PyMotionEngine {
             }
             ethercat.insert(
                 cfg.mcu_id,
-                crate::pump::EtherCatRing {
+                motion_core::pump::EtherCatRing {
                     conn: Arc::downgrade(conn),
                     ring,
                 },
@@ -261,7 +261,7 @@ impl PyMotionEngine {
             })?;
 
             if cfg.has_pulse_lanes() {
-                let endpoint = crate::pump::build_endpoint(
+                let endpoint = motion_core::pump::build_endpoint(
                     cfg,
                     Arc::downgrade(io),
                     pump_control.clone(),
@@ -280,11 +280,12 @@ impl PyMotionEngine {
                 let depth = endpoint.ring_depth();
                 for axis in cfg.pulse_capable_axes() {
                     ring_depth_table
-                        .entry(crate::types::AxisKey {
+                        .entry(motion_core::types::AxisKey {
                             mcu_id: cfg.mcu_id,
                             axis: axis as u8,
                         })
-                        .or_default()[crate::axis_transport::TRANSPORT_PULSE as usize] = depth;
+                        .or_default()
+                        [motion_core::axis_transport::TRANSPORT_PULSE as usize] = depth;
                 }
                 let shared = Arc::new(Mutex::new(endpoint));
                 self.stepcompress_endpoints
@@ -296,7 +297,7 @@ impl PyMotionEngine {
 
             let phase_lanes = cfg.phase_capable_axes();
             if !phase_lanes.is_empty() {
-                let endpoint = crate::pump::build_sample_endpoint(
+                let endpoint = motion_core::pump::build_sample_endpoint(
                     cfg,
                     Arc::downgrade(io),
                     pump_control.clone(),
@@ -314,12 +315,13 @@ impl PyMotionEngine {
                 )?;
                 for axis in phase_lanes {
                     ring_depth_table
-                        .entry(crate::types::AxisKey {
+                        .entry(motion_core::types::AxisKey {
                             mcu_id: cfg.mcu_id,
                             axis: axis as u8,
                         })
-                        .or_default()[crate::axis_transport::TRANSPORT_PHASE as usize] =
-                        crate::pump::SAMPLE_LANE_PIECE_WINDOW;
+                        .or_default()
+                        [motion_core::axis_transport::TRANSPORT_PHASE as usize] =
+                        motion_core::pump::SAMPLE_LANE_PIECE_WINDOW;
                 }
                 let mcu_retired = endpoint.mcu_retired();
                 io.attach_heartbeat_callback(Arc::new(move |counts: &[u32], clocks: &[u64]| {
@@ -337,12 +339,12 @@ impl PyMotionEngine {
         *self.pump.pacer.lock_ok() = if paced_step.is_empty() {
             None
         } else {
-            Some(crate::pump::StepcompressPacer::spawn(paced_step))
+            Some(motion_core::pump::StepcompressPacer::spawn(paced_step))
         };
         *self.pump.sample_pacer.lock_ok() = if paced_sample.is_empty() {
             None
         } else {
-            Some(crate::pump::SamplePacer::spawn(paced_sample))
+            Some(motion_core::pump::SamplePacer::spawn(paced_sample))
         };
 
         let ring_depth_table_for_pump = ring_depth_table;
@@ -350,15 +352,15 @@ impl PyMotionEngine {
         let drain_for_pump = self.drain.clone();
         let endpoint_death_for_pump = Arc::clone(&self.latched.endpoint_death);
         let transports_for_depth = Arc::clone(&transports);
-        Ok(crate::worker::PumpResources {
-            sink: crate::pump::WireSink {
+        Ok(motion_core::worker::PumpResources {
+            sink: motion_core::pump::WireSink {
                 stepcompress,
                 samples,
                 ethercat,
                 transports,
                 timeout: Duration::from_secs(5),
             },
-            callbacks: crate::pump::PumpCallbacks {
+            callbacks: motion_core::pump::PumpCallbacks {
                 ring_depth_of: Box::new(move |k| {
                     let slots = ring_depth_table_for_pump
                         .get(&k)
@@ -369,7 +371,7 @@ impl PyMotionEngine {
                         depth != 0,
                         "pump axis {k:?} has no ring depth for the {} transport it is routed \
                          through",
-                        crate::axis_transport::transport_name(mode)
+                        motion_core::axis_transport::transport_name(mode)
                     );
                     depth
                 }),
@@ -377,13 +379,15 @@ impl PyMotionEngine {
                     let r = router_for_pump.lock_ok();
                     r.ack_clock_and_freq(mcu_handle_from_raw(mcu_id))
                 }),
-                on_fatal_transport: Box::new(move |key: crate::types::AxisKey, reason: &str| {
-                    escalate_endpoint_death(&endpoint_death_for_pump, key.mcu_id, reason);
-                }),
+                on_fatal_transport: Box::new(
+                    move |key: motion_core::types::AxisKey, reason: &str| {
+                        escalate_endpoint_death(&endpoint_death_for_pump, key.mcu_id, reason);
+                    },
+                ),
                 on_abandon: Box::new(log_abandoned_spans),
                 on_drip_stall: Box::new(abort_on_drip_stall),
             },
-            history: crate::pump::HistoryRecorder {
+            history: motion_core::pump::HistoryRecorder {
                 store: Arc::clone(&self.motion_history),
             },
             drain: drain_for_pump,
@@ -401,11 +405,11 @@ impl PyMotionEngine {
         mcu_id: u32,
         frame: &'static str,
         seq_field: &'static str,
-        pump_control: &crossbeam_channel::Sender<crate::pump::PumpMsg>,
-        clock_of: Option<crate::pump::ClockSource>,
+        pump_control: &crossbeam_channel::Sender<motion_core::pump::PumpMsg>,
+        clock_of: Option<motion_core::pump::ClockSource>,
     ) -> PyResult<()> {
         let ack_tx = pump_control.clone();
-        let skew_monitor = Mutex::new(crate::pump::skew_monitor::SkewMonitor::default());
+        let skew_monitor = Mutex::new(motion_core::pump::skew_monitor::SkewMonitor::default());
         let death_latch = Arc::clone(&self.latched.endpoint_death);
         // The simulator splits clock domains on purpose: klippy runs on the
         // real kernel clock while the MCU processes live on the shared virtual
@@ -429,7 +433,7 @@ impl PyMotionEngine {
                     (clock_of.as_ref(), params.try_get_u32("clock"))
                 {
                     if let Some((projected, freq)) = clock_of(mcu_id) {
-                        use crate::pump::skew_monitor::SkewVerdict;
+                        use motion_core::pump::skew_monitor::SkewVerdict;
                         let skew_ticks = (projected as u32).wrapping_sub(mcu_clock) as i32;
                         let skew_secs = f64::from(skew_ticks) / freq;
                         match skew_monitor.lock_ok().observe(skew_secs) {
@@ -484,7 +488,7 @@ impl PyMotionEngine {
                         );
                     }
                 }
-                let _ = ack_tx.send(crate::pump::PumpMsg::StepcompressBarrierAck {
+                let _ = ack_tx.send(motion_core::pump::PumpMsg::StepcompressBarrierAck {
                     mcu_id,
                     oid: oid as u8,
                     seq,
@@ -499,21 +503,21 @@ impl PyMotionEngine {
 
     pub(super) fn spawn_pipeline(
         &self,
-        cfg: &config::PlannerConfig,
+        cfg: &planner_config::PlannerConfig,
         mcu_configs: &[McuAxisConfig],
         host_ios: &HashMap<u32, Arc<McuHostIo>>,
         ec_conns: &HashMap<u32, Arc<McuSerialConn>>,
-    ) -> PyResult<crossbeam_channel::Sender<crate::pump::PumpMsg>> {
+    ) -> PyResult<crossbeam_channel::Sender<motion_core::pump::PumpMsg>> {
         let counter = Arc::clone(&self.dispatched_segments);
         let router_arc = Arc::clone(&self.router);
 
-        let (pump_tx, pump_rx) = crossbeam_channel::unbounded::<crate::pump::PumpMsg>();
+        let (pump_tx, pump_rx) = crossbeam_channel::unbounded::<motion_core::pump::PumpMsg>();
         let pump_resources =
             self.build_pump_resources(mcu_configs, host_ios, ec_conns, &pump_tx)?;
 
         let anchor_mutex = Arc::clone(&self.dispatch_anchor);
-        *anchor_mutex.lock_ok() = crate::anchor::Anchor::new();
-        let dispatch_resources = crate::worker::DispatchResources {
+        *anchor_mutex.lock_ok() = motion_core::anchor::Anchor::new();
+        let dispatch_resources = motion_core::worker::DispatchResources {
             transports: Arc::clone(&self.axis_transports.lock_ok()),
             router: Arc::clone(&router_arc),
             anchor: anchor_mutex,
@@ -535,7 +539,7 @@ impl PyMotionEngine {
                 "planner already initialized (raced)",
             ));
         }
-        let pipeline = crate::worker::setup_pipeline(
+        let pipeline = motion_core::worker::setup_pipeline(
             stream_cfg,
             axis_chains,
             home,
@@ -631,7 +635,7 @@ impl PyMotionEngine {
         mcu_configs: &[McuAxisConfig],
         ethercat_mcu_ids: &HashSet<u32>,
         ec_conns: &HashMap<u32, Arc<McuSerialConn>>,
-        pump_control: crossbeam_channel::Sender<crate::pump::PumpMsg>,
+        pump_control: crossbeam_channel::Sender<motion_core::pump::PumpMsg>,
     ) {
         for cfg_mcu in mcu_configs {
             self.wire_mcu_supervision_for(cfg_mcu, ethercat_mcu_ids, ec_conns, &pump_control);
@@ -643,7 +647,7 @@ impl PyMotionEngine {
         cfg_mcu: &McuAxisConfig,
         ethercat_mcu_ids: &HashSet<u32>,
         ec_conns: &HashMap<u32, Arc<McuSerialConn>>,
-        pump_control: &crossbeam_channel::Sender<crate::pump::PumpMsg>,
+        pump_control: &crossbeam_channel::Sender<motion_core::pump::PumpMsg>,
     ) {
         let mcu_id = cfg_mcu.mcu_id;
 
@@ -714,10 +718,10 @@ impl PyMotionEngine {
 }
 
 pub(super) fn report_ethercat_credit(
-    pump_tx: &crossbeam_channel::Sender<crate::pump::PumpMsg>,
+    pump_tx: &crossbeam_channel::Sender<motion_core::pump::PumpMsg>,
     mcu_id: u32,
     slot_axes: &[usize],
-    filler: &crate::pump::RingFiller,
+    filler: &motion_core::pump::RingFiller,
     playback_clocks: &[u64],
 ) -> Result<(), String> {
     if slot_axes.len() != playback_clocks.len() {
@@ -755,13 +759,15 @@ pub(super) fn report_ethercat_credit(
         retired_counts.push(retired);
     }
     pump_tx
-        .send(crate::pump::PumpMsg::Heartbeat(crate::pump::HeartbeatMsg {
-            mcu_id,
-            axes,
-            consumed_counts: Some(consumed_counts),
-            retired_counts,
-            retired_by: crate::pump::RetiredBy::EtherCat,
-        }))
+        .send(motion_core::pump::PumpMsg::Heartbeat(
+            motion_core::pump::HeartbeatMsg {
+                mcu_id,
+                axes,
+                consumed_counts: Some(consumed_counts),
+                retired_counts,
+                retired_by: motion_core::pump::RetiredBy::EtherCat,
+            },
+        ))
         .map_err(|_| format!("EtherCAT mcu {mcu_id}: pump control channel closed"))
 }
 
@@ -770,9 +776,9 @@ pub(super) struct EthercatHeartbeatSupervisor {
     pub(super) mcu_label: String,
     pub(super) homing: Arc<HomingState>,
     pub(super) latched_drive_fault: Arc<Mutex<HashMap<u32, u16>>>,
-    pub(super) pump_tx: crossbeam_channel::Sender<crate::pump::PumpMsg>,
+    pub(super) pump_tx: crossbeam_channel::Sender<motion_core::pump::PumpMsg>,
     pub(super) slot_axes: Vec<usize>,
-    pub(super) filler: crate::pump::RingFiller,
+    pub(super) filler: motion_core::pump::RingFiller,
 }
 
 impl EthercatHeartbeatSupervisor {
@@ -788,10 +794,12 @@ impl EthercatHeartbeatSupervisor {
             &self.filler,
             &hb.playback_clocks,
         ) {
-            let _ = self.pump_tx.send(crate::pump::PumpMsg::StepcompressFatal {
-                mcu_id: self.mcu_id,
-                error,
-            });
+            let _ = self
+                .pump_tx
+                .send(motion_core::pump::PumpMsg::StepcompressFatal {
+                    mcu_id: self.mcu_id,
+                    error,
+                });
         }
     }
 
@@ -809,13 +817,13 @@ impl EthercatHeartbeatSupervisor {
         self.latched_drive_fault
             .lock_ok()
             .insert(self.mcu_id, fault_code);
-        crate::pump::emit_fault_snapshot("homing_drive_fault", i32::from(fault_code));
+        motion_core::pump::emit_fault_snapshot("homing_drive_fault", i32::from(fault_code));
         let _ = self
             .pump_tx
-            .send(crate::pump::PumpMsg::Flush(run.all_axis_keys.clone()));
+            .send(motion_core::pump::PumpMsg::Flush(run.all_axis_keys.clone()));
         let _ = self
             .pump_tx
-            .send(crate::pump::PumpMsg::DripDisarm(run.cohort));
+            .send(motion_core::pump::PumpMsg::DripDisarm(run.cohort));
         let error = self
             .homing
             .wait_for_pending_suppresses(run.cohort)
@@ -835,7 +843,7 @@ impl EthercatHeartbeatSupervisor {
             .lock_ok()
             .insert(self.mcu_id, fault_code);
         if prev != Some(fault_code) {
-            crate::pump::emit_fault_snapshot("drive_fault_heartbeat", i32::from(fault_code));
+            motion_core::pump::emit_fault_snapshot("drive_fault_heartbeat", i32::from(fault_code));
             tracing::error!(
                 event = "ethercat_drive_fault_latched",
                 mcu_id = self.mcu_id,

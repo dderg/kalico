@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use snapshot_core::SnapshotParams;
 
-use crate::config::from_doc::read_motion_settings;
+use planner_config::from_doc::read_motion_settings;
 
 /// Snapshot the pipeline for `waypoints` under the motion config parsed
 /// from `config_text` — the same section reader (defaults, bounds,

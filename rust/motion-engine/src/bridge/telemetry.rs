@@ -2,9 +2,9 @@ use super::{
     DRAIN_TIMEOUT, FlushWait, HashMap, Ordering, PyMotionEngine, PyResult, PyRuntimeError, Python,
     collect_motor_positions_inner, planner_err, pymethods,
 };
-use crate::lock_ext::LockExt;
-use crate::types::mcu_handle_from_raw;
 use host_rt::clock::{HostSecs, PrintTime};
+use motion_core::lock_ext::LockExt;
+use motion_core::types::mcu_handle_from_raw;
 
 #[pymethods]
 impl PyMotionEngine {
@@ -168,7 +168,7 @@ impl PyMotionEngine {
             .map_or(0, |p| p.pending_channel_moves() as u64)
     }
     fn input_channel_capacity(&self) -> u64 {
-        crate::worker::INPUT_CHANNEL_CAP as u64
+        motion_core::worker::INPUT_CHANNEL_CAP as u64
     }
     /// Fd the host reactor registers for engine readiness: it becomes
     /// readable when input-channel space frees after a refused submit, and
@@ -189,7 +189,7 @@ impl PyMotionEngine {
         })?;
         match planner.fence_start(force) {
             Ok(id) => Ok(Some(id)),
-            Err(crate::worker::StreamWorkerError::ChannelFull) => Ok(None),
+            Err(motion_core::worker::StreamWorkerError::ChannelFull) => Ok(None),
             Err(e) => Err(planner_err(e)),
         }
     }
@@ -284,7 +284,7 @@ impl PyMotionEngine {
         self.pump.backlog.load(Ordering::Acquire)
     }
     fn motion_lead_secs(&self) -> f64 {
-        crate::anchor::DEFAULT_LEAD_SECS
+        motion_core::anchor::DEFAULT_LEAD_SECS
     }
     fn dispatched_segment_count(&self) -> u64 {
         self.dispatched_segments.load(Ordering::Relaxed)
@@ -480,7 +480,7 @@ impl PyMotionEngine {
         })?;
         match planner.flush_try_start() {
             Ok(rx) => Ok(Some(rx)),
-            Err(crate::worker::StreamWorkerError::ChannelFull) => Ok(None),
+            Err(motion_core::worker::StreamWorkerError::ChannelFull) => Ok(None),
             Err(e) => Err(planner_err(e)),
         }
     }

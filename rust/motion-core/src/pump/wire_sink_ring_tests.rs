@@ -3,7 +3,7 @@ use crate::lock_ext::LockExt;
 use crate::pump::{AxisFrame, AxisKey, DrainTick, SendError, SpanSink};
 use ethercat_rt::server::FrameServer;
 use ethercat_rt::wire::{Command, push_sample_runs_response_frame};
-use ethercat_setpoint::setpoint_fill::{CLOCK_FREQ_HZ, ChainFiller, LaneSpec};
+use ethercat_setpoint_fill::setpoint_fill::{CLOCK_FREQ_HZ, ChainFiller, LaneSpec};
 use host_rt::mcu_serial_conn::McuSerialConn;
 use mcu_protocol::messages::{LANE_RUN_FLAG_REANCHOR, LANE_RUN_FLAG_TAIL, LaneRun};
 use std::collections::HashMap;

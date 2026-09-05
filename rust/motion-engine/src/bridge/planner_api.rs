@@ -1,10 +1,9 @@
 use super::{
     Arc, DRAIN_TIMEOUT, FieldValue, HashSet, McuTopologyInput, Ordering, PyMotionEngine, PyResult,
-    PyRuntimeError, PyValueError, Python, classify, config, planner_err, pymethods,
-    require_positive,
+    PyRuntimeError, PyValueError, Python, classify, planner_err, pymethods, require_positive,
 };
-use crate::lock_ext::LockExt;
-use config::from_doc::{planner_config_from_settings, read_motion_settings};
+use motion_core::lock_ext::LockExt;
+use planner_config::from_doc::{planner_config_from_settings, read_motion_settings};
 use pyo3::FromPyObject;
 
 fn unsupported_curve(py: Python<'_>, message: &'static str) -> PyResult<()> {
@@ -98,7 +97,7 @@ impl PyMotionEngine {
                 PyRuntimeError::new_err("planner not initialized — call init_planner first")
             })?;
             planner
-                .submit_nudge(crate::worker::NudgeParams {
+                .submit_nudge(motion_core::worker::NudgeParams {
                     mcu_id,
                     axis: axis_idx,
                     motor_mask,
@@ -221,7 +220,7 @@ impl PyMotionEngine {
                 })?;
                 match planner.submit_move(m) {
                     Ok(()) => {}
-                    Err(crate::worker::StreamWorkerError::ChannelFull) => return Ok(false),
+                    Err(motion_core::worker::StreamWorkerError::ChannelFull) => return Ok(false),
                     Err(e) => return Err(planner_err(e)),
                 }
                 tracing::trace!(
@@ -498,9 +497,9 @@ impl PyMotionEngine {
     fn publish_post_processors(
         &self,
         update: impl FnOnce(
-            &mut config::PostProcessorSet,
+            &mut planner_config::PostProcessorSet,
             &mut bool,
-        ) -> Result<(), config::PostProcessorConfigError>,
+        ) -> Result<(), planner_config::PostProcessorConfigError>,
     ) -> PyResult<()> {
         let mut cfg = self.planner_config.lock_ok();
         let mut processors = cfg.post_processors.clone();
@@ -537,7 +536,7 @@ impl PyMotionEngine {
                 })
                 .map(|c| c.mcu_id)
                 .collect();
-            crate::mcu_config::build_serial_seed_sends(&configs, &ethercat_mcu_ids, pos)
+            motion_core::mcu_config::build_serial_seed_sends(&configs, &ethercat_mcu_ids, pos)
         };
         let mcus = self.mcus.lock_ok();
         for s in sends {
@@ -584,7 +583,7 @@ impl PyMotionEngine {
             .iter()
             .filter(|c| !c.ethercat && c.has_pulse_lanes())
         {
-            let counts = crate::mcu_config::stepcompress_seed_counts(cfg, pos)
+            let counts = motion_core::mcu_config::stepcompress_seed_counts(cfg, pos)
                 .map_err(PyRuntimeError::new_err)?;
             let endpoint = endpoints.get(&cfg.mcu_id).ok_or_else(|| {
                 PyRuntimeError::new_err(format!(
@@ -612,8 +611,8 @@ impl PyMotionEngine {
             .iter()
             .filter(|c| !c.ethercat && c.has_phase_lanes())
         {
-            let counts =
-                crate::mcu_config::sample_seed_counts(cfg, pos).map_err(PyRuntimeError::new_err)?;
+            let counts = motion_core::mcu_config::sample_seed_counts(cfg, pos)
+                .map_err(PyRuntimeError::new_err)?;
             let endpoint = endpoints.get(&cfg.mcu_id).ok_or_else(|| {
                 PyRuntimeError::new_err(format!(
                     "position seed: no sample endpoint registered for phase mcu {}",
@@ -681,7 +680,7 @@ impl PyMotionEngine {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("planner disappeared during position reseed"))?;
         planner
-            .stream_open(crate::mcu_config::reanchor_stream_pos(gcode))
+            .stream_open(motion_core::mcu_config::reanchor_stream_pos(gcode))
             .map_err(planner_err)?;
         self.send_serial_position_seeds(machine)?;
         Ok(())
@@ -689,10 +688,10 @@ impl PyMotionEngine {
 
     fn rebase_motion_history_after_position_set(&self, machine: geometry::MachinePos) {
         let host_now = motion_history_host_now();
-        let configs: Vec<crate::mcu_config::McuAxisConfig> =
+        let configs: Vec<motion_core::mcu_config::McuAxisConfig> =
             self.mcu_axis_configs.lock_ok().clone();
         let mut store = self.motion_history.lock_ok();
-        for (key, pos) in crate::mcu_config::reanchor_axis_targets(&configs, machine) {
+        for (key, pos) in motion_core::mcu_config::reanchor_axis_targets(&configs, machine) {
             store.rebase_axis(key, host_now, pos);
         }
     }

@@ -8,7 +8,7 @@
 
 ## What's already proven without hardware
 - MCU stepper hot-path codegen is **byte-identical** to pristine main (disasm-verified). Flashing this branch will not change stepper behavior.
-- The servo consumes a **pre-sampled setpoint ring** — one entry per DC cycle, filled host-side by `ChainFiller` (position plus its torque/velocity feedforward). Unit-tested in `rust/ethercat-setpoint/src/setpoint/tests.rs` and `rust/ethercat-setpoint/src/setpoint_fill/tests.rs`: ring fill/drain and run abutment (runs abut by construction — a hole, an overlap, a late run, or a ring drained while still moving is a latched fault, never a pad or a clamp), per-lane free-cycle headroom accounting (the pump's only pacing signal), grid-phase observation (`observe_grid` rejects index/clock regression), and origin anchoring (a lane's counts frame latches at the first played entry of an anchor epoch; a shift without a re-anchor is `OriginShift`).
+- The servo consumes a **pre-sampled setpoint ring** — one entry per DC cycle, filled host-side by `ChainFiller` (position plus its torque/velocity feedforward). Unit-tested in `rust/ethercat-setpoint/src/setpoint/tests.rs` and `rust/ethercat-setpoint-fill/src/setpoint_fill/tests.rs`: ring fill/drain and run abutment (runs abut by construction — a hole, an overlap, a late run, or a ring drained while still moving is a latched fault, never a pad or a clamp), per-lane free-cycle headroom accounting (the pump's only pacing signal), grid-phase observation (`observe_grid` rejects index/clock regression), and origin anchoring (a lane's counts frame latches at the first played entry of an anchor epoch; a shift without a re-anchor is `OriginShift`).
 - Sustained streaming past one ring depth works over the real `McuSerialConn ↔ FrameServer` socket (no stall — the "stopped after first move" class is covered).
 - `klippy → motion-engine → endpoint` host wiring is ported and the stepper-path tests still pass.
 
@@ -373,4 +373,4 @@ on the drive's retained state. A failure to write that remap is `rc=-6`
 ## If something's off
 - Re-run `cargo test -p ethercat-rt -p motion-engine` on the Pi — these are the host-path regression tests.
 - The stub-level path (step 2) isolates host bugs from drive/EtherCAT bugs — always confirm it green before blaming the drive.
-- Per-piece dispatch projection diagnostics (`[dispatch-margin]` and `[project]`) are emitted at **trace** level to avoid flooding production logs. Enable them with `RUST_LOG=trace` (or a targeted filter such as `RUST_LOG=motion_engine=trace,host_rt=trace`). `RUST_LOG` is read by the `EnvFilter` in `rust/motion-engine/src/logging/mod.rs` at bridge startup.
+- Per-piece dispatch projection diagnostics (`[dispatch-margin]` and `[project]`) are emitted at **trace** level to avoid flooding production logs. Enable them with `RUST_LOG=trace`. `RUST_LOG` is read by the `EnvFilter` in `rust/motion-services/src/logging/mod.rs` at bridge startup.

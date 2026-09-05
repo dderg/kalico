@@ -19,6 +19,7 @@ runtime-contract = { path = "../runtime-contract" }
 planner-config = { path = "../planner-config" }
 step-shim = { path = "../step-shim" }
 ethercat-setpoint = { path = "../ethercat-setpoint" }
+ethercat-setpoint-fill = { path = "../ethercat-setpoint-fill" }
 crossbeam-channel = "0.5"
 tracing = "0.1"
 thiserror = { workspace = true }

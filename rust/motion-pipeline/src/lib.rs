@@ -39,7 +39,7 @@ const STAGE_CHANNEL_CAP: usize = 16;
 const RAW_CHANNEL_CAP: usize = 8;
 
 /// Wires the pure stream stages (fit stage → planner → lowerer → shaper) into
-/// OS threads. Production goes through `motion_engine::worker::setup_pipeline`,
+/// OS threads. Production goes through `motion_core::worker::setup_pipeline`,
 /// which wraps these stages with the dispatcher and pump; this stage-only
 /// wiring is also used standalone by offline consumers (seam harness,
 /// trajectory dump) that have no hardware behind them.

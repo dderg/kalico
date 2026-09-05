@@ -1,4 +1,4 @@
-use crate::lock_ext::LockExt;
+use motion_core::lock_ext::LockExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -14,11 +14,11 @@ use host_rt::host_io::{McuHostIo, McuHostIoConfig};
 use host_rt::mcu_serial_conn::McuSerialConn;
 use host_rt::passthrough_queue::PassthroughRouter;
 
-use crate::classify;
-use crate::config::{self, PlannerConfig};
-use crate::mcu_config::{McuAxisConfig, McuTopologyInput, build_mcu_configs};
-use crate::types::mcu_handle_from_raw;
-use crate::worker::{StreamWorkerError, StreamWorkerHandle};
+use motion_core::classify;
+use motion_core::mcu_config::{McuAxisConfig, McuTopologyInput, build_mcu_configs};
+use motion_core::types::mcu_handle_from_raw;
+use motion_core::worker::{StreamWorkerError, StreamWorkerHandle};
+use planner_config::PlannerConfig;
 
 mod attach;
 mod axis_transport_api;
@@ -181,22 +181,23 @@ pub struct PyMotionEngine {
     bed_mesh: Mutex<Option<Arc<geometry::SurfaceTransform>>>,
     last_g5_pq: Mutex<Option<(f64, f64)>>,
     mcu_axis_configs: Arc<Mutex<Vec<McuAxisConfig>>>,
-    axis_transports: Mutex<Arc<crate::axis_transport::AxisTransports>>,
-    stepcompress_endpoints: Arc<Mutex<HashMap<u32, Arc<Mutex<crate::pump::StepcompressEndpoint>>>>>,
-    sample_endpoints: Arc<Mutex<HashMap<u32, Arc<Mutex<crate::pump::SampleEndpoint>>>>>,
+    axis_transports: Mutex<Arc<motion_core::axis_transport::AxisTransports>>,
+    stepcompress_endpoints:
+        Arc<Mutex<HashMap<u32, Arc<Mutex<motion_core::pump::StepcompressEndpoint>>>>>,
+    sample_endpoints: Arc<Mutex<HashMap<u32, Arc<Mutex<motion_core::pump::SampleEndpoint>>>>>,
     /// The sweep the last `resonance_buzz` armed, kept so completion is asked
     /// of the routes it actually drove.
-    pub(crate) buzz_token: Mutex<Option<crate::pump::BuzzToken>>,
+    pub(crate) buzz_token: Mutex<Option<motion_core::pump::BuzzToken>>,
     dispatched_segments: Arc<AtomicU64>,
-    dispatch_anchor: Arc<Mutex<crate::anchor::Anchor>>,
+    dispatch_anchor: Arc<Mutex<motion_core::anchor::Anchor>>,
     fallback_clock_conversions: Arc<AtomicU64>,
     clock_freqs: Arc<Mutex<HashMap<u32, f64>>>,
     nominal_clock_freqs: Arc<Mutex<HashMap<u32, u32>>>,
     events_dir: Mutex<Option<std::path::PathBuf>>,
     pump: PumpHandles,
     position_poll: PositionPoll,
-    drain: std::sync::Arc<crate::drain::DrainLedger>,
-    motion_history: Arc<Mutex<crate::motion_history::HistoryStore>>,
+    drain: std::sync::Arc<motion_core::drain::DrainLedger>,
+    motion_history: Arc<Mutex<motion_core::motion_history::HistoryStore>>,
     homing: Arc<HomingState>,
     flush: FlushState,
     // Monotonic id stamped on every streamed move as its `source.start_line`.
@@ -208,7 +209,7 @@ pub struct PyMotionEngine {
     move_seq: std::sync::atomic::AtomicU64,
     latched: LatchedFaults,
     remote_triggers: Mutex<HashMap<u8, (u32, host_rt::host_io::InterceptorId)>>,
-    endpoint_calls: crate::bg_call::BgCalls,
+    endpoint_calls: motion_services::bg_call::BgCalls,
     shut_down: AtomicBool,
 }
 
@@ -227,26 +228,30 @@ impl PyMotionEngine {
             bed_mesh: Mutex::new(None),
             last_g5_pq: Mutex::new(None),
             mcu_axis_configs: Arc::new(Mutex::new(Vec::new())),
-            axis_transports: Mutex::new(Arc::new(crate::axis_transport::AxisTransports::default())),
+            axis_transports: Mutex::new(Arc::new(
+                motion_core::axis_transport::AxisTransports::default(),
+            )),
             stepcompress_endpoints: Arc::new(Mutex::new(HashMap::new())),
             sample_endpoints: Arc::new(Mutex::new(HashMap::new())),
             buzz_token: Mutex::new(None),
             dispatched_segments: Arc::new(AtomicU64::new(0)),
-            dispatch_anchor: Arc::new(Mutex::new(crate::anchor::Anchor::new())),
+            dispatch_anchor: Arc::new(Mutex::new(motion_core::anchor::Anchor::new())),
             fallback_clock_conversions: Arc::new(AtomicU64::new(0)),
             clock_freqs: Arc::new(Mutex::new(HashMap::new())),
             nominal_clock_freqs: Arc::new(Mutex::new(HashMap::new())),
             events_dir: Mutex::new(None),
             pump: PumpHandles::default(),
             position_poll: PositionPoll::default(),
-            drain: std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            motion_history: Arc::new(Mutex::new(crate::motion_history::HistoryStore::default())),
+            drain: std::sync::Arc::new(motion_core::drain::DrainLedger::new()),
+            motion_history: Arc::new(Mutex::new(
+                motion_core::motion_history::HistoryStore::default(),
+            )),
             homing: Arc::new(HomingState::default()),
             flush: FlushState::default(),
             move_seq: std::sync::atomic::AtomicU64::new(0),
             latched: LatchedFaults::default(),
             remote_triggers: Mutex::new(HashMap::new()),
-            endpoint_calls: crate::bg_call::BgCalls::default(),
+            endpoint_calls: motion_services::bg_call::BgCalls::default(),
             shut_down: AtomicBool::new(false),
         }
     }
@@ -257,7 +262,7 @@ impl PyMotionEngine {
 
     fn init_logging(&self, events_dir: String) -> PyResult<()> {
         let path = std::path::Path::new(&events_dir);
-        crate::logging::init_logging(path).map_err(|e| {
+        motion_services::logging::init_logging(path).map_err(|e| {
             pyo3::exceptions::PyRuntimeError::new_err(format!("init_logging failed: {e}"))
         })?;
         let mut guard = self.events_dir.lock_ok();
@@ -267,7 +272,7 @@ impl PyMotionEngine {
 
     #[pyo3(signature = (session_id, print_id=String::new()))]
     fn set_session_context(&self, session_id: String, print_id: String) {
-        crate::logging::set_context(session_id, print_id);
+        motion_services::logging::set_context(session_id, print_id);
     }
 
     #[pyo3(signature = (label, serial_path, baud))]
@@ -458,7 +463,7 @@ impl PyMotionEngine {
         let pump_join = {
             let tx = self.pump.tx.lock_ok().take();
             if let Some(tx) = tx {
-                let _ = tx.send(crate::pump::PumpMsg::Shutdown);
+                let _ = tx.send(motion_core::pump::PumpMsg::Shutdown);
             }
             self.pump.thread.lock_ok().take()
         };
@@ -710,7 +715,7 @@ impl PyMotionEngine {
         conn: McuSerialConn,
         slot_axes: Vec<usize>,
         sample_grid: SampleGrid,
-        ring_filler: crate::pump::RingFiller,
+        ring_filler: motion_core::pump::RingFiller,
     ) {
         let ethercat = McuConnection {
             label: label.to_owned(),
@@ -741,7 +746,7 @@ impl PyMotionEngine {
         self.router
             .lock_ok()
             .set_nominal_freq(
-                crate::types::mcu_handle_from_raw(raw),
+                motion_core::types::mcu_handle_from_raw(raw),
                 f64::from(ETHERCAT_CLOCK_FREQ_HZ),
             )
             .expect("ethercat mcu handle was claimed on this router");

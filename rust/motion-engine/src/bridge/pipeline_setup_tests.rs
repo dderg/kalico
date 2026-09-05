@@ -2,12 +2,12 @@ use super::pipeline_setup::{
     build_stream_config, report_ethercat_credit, require_unlimited_config_jerk,
 };
 use super::{PyMotionEngine, planner_api::require_supported_jerk_override};
-use crate::config::PlannerConfig;
-use crate::lock_ext::LockExt;
+use motion_core::lock_ext::LockExt;
+use planner_config::PlannerConfig;
 
 #[test]
 fn ethercat_credit_waits_for_delivery_and_the_laggard_motor_playback() {
-    use ethercat_setpoint::setpoint_fill::{CLOCK_FREQ_HZ, ChainFiller, LaneSpec};
+    use ethercat_setpoint_fill::setpoint_fill::{CLOCK_FREQ_HZ, ChainFiller, LaneSpec};
     use std::sync::{Arc, Mutex};
     use trajectory::{ClockedMotorSpan, ContinuousAxis, MotorGroup, MotorSpan, MotorTerm};
 
@@ -57,7 +57,7 @@ fn ethercat_credit_waits_for_delivery_and_the_laggard_motor_playback() {
     let (tx, rx) = crossbeam_channel::unbounded();
     let report = |clocks: &[u64]| {
         report_ethercat_credit(&tx, 4, &[2, 2], &filler, clocks).unwrap();
-        let crate::pump::PumpMsg::Heartbeat(credit) = rx.recv().unwrap() else {
+        let motion_core::pump::PumpMsg::Heartbeat(credit) = rx.recv().unwrap() else {
             panic!("view credit");
         };
         credit

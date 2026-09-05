@@ -2,9 +2,9 @@ use super::{
     PyMotionEngine, PyResult, PyRuntimeError, Python, mcu_handle_from_raw, pymethods,
     slots_for_axis,
 };
-use crate::lock_ext::LockExt;
-use crate::pump::{BuzzLane, BuzzParams, BuzzRoute, BuzzWave};
-use crate::types::AxisKey;
+use motion_core::lock_ext::LockExt;
+use motion_core::pump::{BuzzLane, BuzzParams, BuzzRoute, BuzzWave};
+use motion_core::types::AxisKey;
 use pyo3::types::PyAnyMethods;
 use pyo3::{Bound, PyAny};
 use std::sync::Arc;
@@ -68,7 +68,8 @@ impl PyMotionEngine {
             "servo torque command"
         );
         Ok(self.endpoint_calls.start("set_torque", move || {
-            let result = crate::servo_torque::send_set_torque(&conn, value, execute_at_ns)?;
+            let result =
+                motion_services::servo_torque::send_set_torque(&conn, value, execute_at_ns)?;
             if result != 0 {
                 tracing::error!(
                     subsystem = "engine",
@@ -101,8 +102,9 @@ impl PyMotionEngine {
             path,
             "servo capture start"
         );
-        let result = crate::servo_capture::send_start_capture(&conn, &path, &started_utc, &drives)
-            .map_err(PyRuntimeError::new_err)?;
+        let result =
+            motion_services::servo_capture::send_start_capture(&conn, &path, &started_utc, &drives)
+                .map_err(PyRuntimeError::new_err)?;
         require_py_endpoint_ok(result, |result| {
             format!("servo capture start failed: endpoint result {result}")
         })
@@ -115,8 +117,8 @@ impl PyMotionEngine {
             mcu_handle,
             "servo capture stop"
         );
-        let resp =
-            crate::servo_capture::send_stop_capture(&conn).map_err(PyRuntimeError::new_err)?;
+        let resp = motion_services::servo_capture::send_stop_capture(&conn)
+            .map_err(PyRuntimeError::new_err)?;
         tracing::info!(
             subsystem = "engine",
             event = "servo_capture_stopped",
@@ -154,7 +156,7 @@ impl PyMotionEngine {
             })
             .collect();
         Ok(self.endpoint_calls.start("set_drive_limits", move || {
-            let result = crate::servo_torque::send_drive_limits(&conn, entries)?;
+            let result = motion_services::servo_torque::send_drive_limits(&conn, entries)?;
             require_endpoint_ok(result, "set_drive_limits: SDO write failed")
         }))
     }
@@ -169,7 +171,8 @@ impl PyMotionEngine {
         );
         let slot_mask = slots.iter().fold(0u32, |m, &s| m | (1 << s));
         Ok(self.endpoint_calls.start("restore_drive_limits", move || {
-            let result = crate::servo_torque::send_restore_drive_limits(&conn, slot_mask)?;
+            let result =
+                motion_services::servo_torque::send_restore_drive_limits(&conn, slot_mask)?;
             require_endpoint_ok(result, "restore_drive_limits: SDO write failed")
         }))
     }
@@ -181,11 +184,12 @@ impl PyMotionEngine {
             mcu_handle,
             "servo motion discarded on shutdown"
         );
-        let result = crate::servo_torque::send_stop(&conn).map_err(PyRuntimeError::new_err)?;
+        let result =
+            motion_services::servo_torque::send_stop(&conn).map_err(PyRuntimeError::new_err)?;
         require_py_endpoint_ok(result, |result| {
             format!("stop_node: endpoint rejected Stop: result {result}")
         })?;
-        let result = crate::servo_torque::send_set_torque(&conn, false, 0)
+        let result = motion_services::servo_torque::send_set_torque(&conn, false, 0)
             .map_err(PyRuntimeError::new_err)?;
         require_py_endpoint_ok(result, |result| {
             format!("stop_node: endpoint rejected torque disable: result {result}")
@@ -216,7 +220,7 @@ impl PyMotionEngine {
         Ok(self
             .endpoint_calls
             .start("arm_sensorless_endstop", move || {
-                let result = crate::servo_torque::send_arm_sensorless_endstop(
+                let result = motion_services::servo_torque::send_arm_sensorless_endstop(
                     &conn,
                     slot,
                     endstop_id,
@@ -251,9 +255,9 @@ impl PyMotionEngine {
                     ))
                 })?
         };
-        let motor = crate::mcu_config::motor_frame(&cfg, pos_mm);
+        let motor = motion_core::mcu_config::motor_frame(&cfg, pos_mm);
         let seed_lanes: &[usize] =
-            if cfg.kinematics == crate::mcu_config::KINEMATICS_COREXY && axis <= 1 {
+            if cfg.kinematics == motion_core::mcu_config::KINEMATICS_COREXY && axis <= 1 {
                 &[0, 1]
             } else {
                 &[axis]
@@ -282,7 +286,7 @@ impl PyMotionEngine {
                             mc.ethercat_slot_axes
                         )));
                     }
-                    let home_q16 = crate::mcu_config::encode_q16(motor[lane]);
+                    let home_q16 = motion_core::mcu_config::encode_q16(motor[lane]);
                     Ok(slots.into_iter().map(move |slot| (slot, home_q16)))
                 })
                 .collect::<PyResult<Vec<_>>>()?
@@ -305,8 +309,9 @@ impl PyMotionEngine {
         let timeout = std::time::Duration::from_secs_f64(timeout_s);
         Ok(self.endpoint_calls.start("finalize_homed_axis", move || {
             for (slot, home_q16) in seeds {
-                let result =
-                    crate::servo_torque::send_seed_servo_home(&conn, slot, home_q16, timeout)?;
+                let result = motion_services::servo_torque::send_seed_servo_home(
+                    &conn, slot, home_q16, timeout,
+                )?;
                 require_endpoint_ok(
                     result,
                     &format!("finalize_homed_axis: method-35 home-set failed for slot {slot}"),
@@ -332,7 +337,7 @@ impl PyMotionEngine {
             subindex,
             "servo SDO read"
         );
-        let r = crate::servo_sdo::send_sdo_read(&conn, slot, index, subindex)
+        let r = motion_services::servo_sdo::send_sdo_read(&conn, slot, index, subindex)
             .map_err(PyRuntimeError::new_err)?;
         if r.result != 0 {
             tracing::error!(
@@ -346,7 +351,7 @@ impl PyMotionEngine {
             );
             return Err(PyRuntimeError::new_err(format!(
                 "SDO read 0x{index:04x}.{subindex}: {}",
-                crate::servo_sdo::failure_text(r.result)
+                motion_services::servo_sdo::failure_text(r.result)
             )));
         }
         Ok((r.size, u32::from_le_bytes(r.data)))
@@ -372,8 +377,9 @@ impl PyMotionEngine {
             value,
             "servo SDO write"
         );
-        let r = crate::servo_sdo::send_sdo_write(&conn, slot, index, subindex, size, value)
-            .map_err(PyRuntimeError::new_err)?;
+        let r =
+            motion_services::servo_sdo::send_sdo_write(&conn, slot, index, subindex, size, value)
+                .map_err(PyRuntimeError::new_err)?;
         if r.result != 0 {
             tracing::error!(
                 subsystem = "engine",
@@ -390,7 +396,7 @@ impl PyMotionEngine {
             return Err(PyRuntimeError::new_err(format!(
                 "SDO write 0x{index:04x}.{subindex} = {value} (size {size}): {} \
                  (drive reports raw 0x{readback:x})",
-                crate::servo_sdo::failure_text(r.result)
+                motion_services::servo_sdo::failure_text(r.result)
             )));
         }
         Ok((r.readback_size, u32::from_le_bytes(r.readback_data)))
@@ -482,7 +488,7 @@ impl PyMotionEngine {
         );
         let result = py
             .detach(|| {
-                crate::servo_torque::send_set_diff_damper(
+                motion_services::servo_torque::send_set_diff_damper(
                     &conn,
                     mcu_protocol::messages::SetDiffDamper {
                         slot_a,
@@ -513,7 +519,7 @@ impl PyMotionEngine {
         py.detach(|| {
             reconfigure_feedforward(&conn, &ring, "set_ff_lead", |filler| {
                 require_endpoint_ok(
-                    crate::servo_torque::send_set_ff_lead(
+                    motion_services::servo_torque::send_set_ff_lead(
                         &conn,
                         mcu_protocol::messages::SetFfLead { slot, lead_ns },
                     )?,
@@ -553,7 +559,7 @@ impl PyMotionEngine {
             values = values_um.len(),
             "servo strain compensation map upload"
         );
-        let result = crate::servo_torque::send_set_strain_comp(
+        let result = motion_services::servo_torque::send_set_strain_comp(
             &conn,
             mcu_protocol::messages::SetStrainComp {
                 slot_a,
@@ -601,7 +607,7 @@ impl PyMotionEngine {
         );
         let result = py
             .detach(|| {
-                crate::servo_torque::send_set_diff_trim(
+                motion_services::servo_torque::send_set_diff_trim(
                     &conn,
                     mcu_protocol::messages::SetDiffTrim {
                         slot_a,
@@ -735,7 +741,7 @@ impl PyMotionEngine {
                     ));
                 }
                 require_endpoint_ok(
-                    crate::servo_torque::send_set_dynamics_model(&conn, msg)?,
+                    motion_services::servo_torque::send_set_dynamics_model(&conn, msg)?,
                     "set_dynamics_model",
                 )?;
                 require_filler_ok(filler.install_dynamics(host_model), "set_dynamics_model")
@@ -824,7 +830,7 @@ impl PyMotionEngine {
     /// The host-side setpoint filler of a claimed EtherCAT node. Only an
     /// EtherCAT connection has one, so a handle without a filler cannot
     /// execute setpoints at all.
-    fn ring_filler(&self, mcu_handle: u32, what: &str) -> PyResult<crate::pump::RingFiller> {
+    fn ring_filler(&self, mcu_handle: u32, what: &str) -> PyResult<motion_core::pump::RingFiller> {
         self.mcus
             .lock_ok()
             .get(&mcu_handle)
@@ -1048,9 +1054,9 @@ const RECONFIG_GRID_TIMEOUT: Duration = Duration::from_secs(5);
 /// split.
 fn reconfigure_feedforward<T>(
     conn: &host_rt::mcu_serial_conn::McuSerialConn,
-    ring: &crate::pump::RingFiller,
+    ring: &motion_core::pump::RingFiller,
     what: &str,
-    apply: impl FnOnce(&mut ethercat_setpoint::setpoint_fill::ChainFiller) -> Result<T, String>,
+    apply: impl FnOnce(&mut ethercat_setpoint_fill::setpoint_fill::ChainFiller) -> Result<T, String>,
 ) -> Result<T, String> {
     let mut filler = ring.lock_ok();
     let grid =

@@ -20,6 +20,7 @@ members = [
     "mcu-protocol",
     "ethercat-rt",
     "ethercat-setpoint",
+    "ethercat-setpoint-fill",
     "shaper-ident",
     "step-shim",
 ]

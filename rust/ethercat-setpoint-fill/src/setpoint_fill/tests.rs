@@ -110,7 +110,7 @@ fn positions_are_the_span_evaluated_on_the_dc_grid_in_anchored_counts() {
         let pva = span.eval_at_clock(clock).expect("in span");
         assert_eq!(
             sample.pos_counts,
-            crate::scale::mm_to_counts(pva.position - origin, CPM)
+            ethercat_setpoint::scale::mm_to_counts(pva.position - origin, CPM)
         );
         assert_eq!(sample.vel_ff, (pva.velocity * CPM).round() as i32);
     }
@@ -546,7 +546,8 @@ fn a_reconfiguration_is_refused_while_a_view_is_still_staged() {
         .expect("stage");
     assert!(!f.quiescent());
     assert_eq!(f.set_ff_lead(0, INTERVAL), ERR_RECONFIG_STREAMING);
-    let model = crate::dynamics::DynamicsModel::from_toml_str(SCALAR_PROFILE).expect("profile");
+    let model =
+        ethercat_setpoint::dynamics::DynamicsModel::from_toml_str(SCALAR_PROFILE).expect("profile");
     assert_eq!(f.install_dynamics(model), ERR_RECONFIG_STREAMING);
 }
 
@@ -592,13 +593,15 @@ fn a_lead_for_a_slot_the_chain_has_no_lane_for_is_refused() {
 #[allow(clippy::cast_possible_truncation)]
 fn an_installed_model_computes_the_torque_feedforward_of_every_later_sample() {
     let mut f = filler(1);
-    let model = crate::dynamics::DynamicsModel::from_toml_str(SCALAR_PROFILE).expect("profile");
+    let model =
+        ethercat_setpoint::dynamics::DynamicsModel::from_toml_str(SCALAR_PROFILE).expect("profile");
     assert_eq!(f.install_dynamics(model), 0);
     let start = GRID_CLOCK + INTERVAL * 4;
     let span = linear_span(start, 0.001, 0.0, 1.0);
     f.push_spans(0, std::slice::from_ref(&span)).expect("stage");
     let runs = f.drain().expect("fill");
-    let reference = crate::dynamics::DynamicsModel::from_toml_str(SCALAR_PROFILE).expect("profile");
+    let reference =
+        ethercat_setpoint::dynamics::DynamicsModel::from_toml_str(SCALAR_PROFILE).expect("profile");
     let pva = span
         .eval_at_clock(start + INTERVAL * 2)
         .expect("inside the span");
@@ -613,6 +616,7 @@ fn an_installed_model_computes_the_torque_feedforward_of_every_later_sample() {
 #[test]
 fn a_model_that_does_not_cover_every_lane_is_refused() {
     let mut f = filler(2);
-    let model = crate::dynamics::DynamicsModel::from_toml_str(SCALAR_PROFILE).expect("profile");
+    let model =
+        ethercat_setpoint::dynamics::DynamicsModel::from_toml_str(SCALAR_PROFILE).expect("profile");
     assert_eq!(f.install_dynamics(model), ERR_RECONFIG_BAD_DIM);
 }

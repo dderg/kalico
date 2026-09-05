@@ -2,9 +2,9 @@ use super::{
     Arc, DataDictionary, MsgProtoParser, Py, PyDict, PyMotionEngine, PyResult, PyRuntimeError,
     Python, mcu_handle_from_raw, pymethods, router_err,
 };
-use crate::lock_ext::LockExt;
 use host_rt::host_io::parser::ArgValue;
 use host_rt::transport::MessageParams;
+use motion_core::lock_ext::LockExt;
 use pyo3::prelude::*;
 
 /// Command argument as klippy passes it: int (covers bool), str (enum/pin

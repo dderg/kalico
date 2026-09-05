@@ -44,7 +44,7 @@ use crate::stream_halt::StreamHalt;
 use crate::torque::{TorqueGate, TorqueState};
 use crate::trim::DiffTrimBank;
 use ethercat_setpoint::setpoint::Played;
-use ethercat_setpoint::setpoint_fill::{ChainFiller, LaneSpec, CLOCK_FREQ_HZ};
+use ethercat_setpoint_fill::setpoint_fill::{ChainFiller, LaneSpec, CLOCK_FREQ_HZ};
 
 const NUM_SLAVES: usize = 2;
 const COUNTS_PER_MM: f64 = 3276.8;

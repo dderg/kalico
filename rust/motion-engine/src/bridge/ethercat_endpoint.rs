@@ -1,4 +1,4 @@
-use crate::lock_ext::LockExt;
+use motion_core::lock_ext::LockExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -451,8 +451,8 @@ pub(crate) fn build_ring_filler(
     grid: SampleGrid,
     dynamics_profile: Option<&str>,
     drives: &[EthercatDrive],
-) -> Result<crate::pump::RingFiller, String> {
-    use ethercat_setpoint::setpoint_fill::{ChainFiller, LaneSpec};
+) -> Result<motion_core::pump::RingFiller, String> {
+    use ethercat_setpoint_fill::setpoint_fill::{ChainFiller, LaneSpec};
 
     if grid.cycle_ticks == 0 {
         return Err("endpoint reported a zero-length DC cycle".to_owned());
@@ -481,7 +481,8 @@ pub(crate) fn build_ring_filler(
             ff_lead_ns,
         });
     }
-    let lead_cycles = (crate::pump::DRIP_WINDOW_SECS * 1e9 / interval_ns as f64).ceil() as u64;
+    let lead_cycles =
+        (motion_core::pump::DRIP_WINDOW_SECS * 1e9 / interval_ns as f64).ceil() as u64;
     let mut filler = ChainFiller::new(&specs, dynamics, interval_ns, lead_cycles);
     filler
         .observe_grid(grid.grid_index, grid.grid_clock)

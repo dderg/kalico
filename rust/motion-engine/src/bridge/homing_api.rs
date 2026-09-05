@@ -3,11 +3,11 @@ use super::{
     Python, RemoteFreeze, TripDeps, TripMember, dispatch_endstop_trip, drip_cohort_participants,
     planner_err, pymethods,
 };
-use crate::lock_ext::LockExt;
+use motion_core::lock_ext::LockExt;
 
 struct ResolvedHomingTarget {
-    all_axis_keys: Vec<crate::types::AxisKey>,
-    axis_key: crate::types::AxisKey,
+    all_axis_keys: Vec<motion_core::types::AxisKey>,
+    axis_key: motion_core::types::AxisKey,
 }
 
 pub(super) fn validate_trip_members(members: &[TripMember]) -> Result<(), String> {
@@ -30,7 +30,7 @@ pub(super) fn validate_trip_members(members: &[TripMember]) -> Result<(), String
 }
 
 pub(super) fn required_motor_axes(
-    kind: crate::kinematics::KinematicsKind,
+    kind: motion_core::kinematics::KinematicsKind,
     requested_axis: Option<u8>,
 ) -> Result<[bool; 4], u8> {
     let Some(axis) = requested_axis else {
@@ -41,7 +41,7 @@ pub(super) fn required_motor_axes(
     }
     let mut required = [false; 4];
     match (kind, axis) {
-        (crate::kinematics::KinematicsKind::CoreXy, 0 | 1) => {
+        (motion_core::kinematics::KinematicsKind::CoreXy, 0 | 1) => {
             required[0] = true;
             required[1] = true;
         }
@@ -51,13 +51,13 @@ pub(super) fn required_motor_axes(
 }
 
 pub(super) fn history_state_at_query(
-    store: &crate::motion_history::HistoryStore,
-    key: crate::types::AxisKey,
+    store: &motion_core::motion_history::HistoryStore,
+    key: motion_core::types::AxisKey,
     source_mcu: u32,
     clock: u64,
     query_host: f64,
     host_now: f64,
-) -> Result<crate::motion_history::AxisState, crate::motion_history::HistoryError> {
+) -> Result<motion_core::motion_history::AxisState, motion_core::motion_history::HistoryError> {
     if key.mcu_id == source_mcu {
         store.state_at_clock(key, clock, query_host, Some(host_now))
     } else {
@@ -144,11 +144,13 @@ impl PyMotionEngine {
 
             self.homing.arm(cohort).map_err(PyRuntimeError::new_err)?;
             self.homing_pump_tx()?
-                .send(crate::pump::PumpMsg::DripArm(crate::pump::DripArm {
-                    cohort,
-                    participants: all_axis_keys.clone(),
-                    timeout: Duration::from_secs(5),
-                }))
+                .send(motion_core::pump::PumpMsg::DripArm(
+                    motion_core::pump::DripArm {
+                        cohort,
+                        participants: all_axis_keys.clone(),
+                        timeout: Duration::from_secs(5),
+                    },
+                ))
                 .map_err(|_| PyRuntimeError::new_err("home_axis: pump channel closed"))?;
 
             // The guard must not outlive this block: `await_homing_dispatch`
@@ -162,8 +164,8 @@ impl PyMotionEngine {
                     .as_ref()
                     .ok_or_else(|| PyRuntimeError::new_err("home_axis: planner not initialized"))?;
                 planner
-                    .home_drip(crate::worker::HomeDripParams {
-                        home_pos: crate::mcu_config::reanchor_home_pos(start_pos),
+                    .home_drip(motion_core::worker::HomeDripParams {
+                        home_pos: motion_core::mcu_config::reanchor_home_pos(start_pos),
                         start: start_pos.0,
                         axis,
                         direction,
@@ -193,8 +195,8 @@ impl PyMotionEngine {
         if startup.is_err() {
             self.homing.cancel_registration();
             if let Some(tx) = self.pump.tx.lock_ok().clone() {
-                let _ = tx.send(crate::pump::PumpMsg::Flush(all_axis_keys));
-                let _ = tx.send(crate::pump::PumpMsg::DripDisarm(cohort));
+                let _ = tx.send(motion_core::pump::PumpMsg::Flush(all_axis_keys));
+                let _ = tx.send(motion_core::pump::PumpMsg::DripDisarm(cohort));
             }
         }
         startup?;
@@ -251,11 +253,11 @@ impl PyMotionEngine {
                 "trsync_state",
                 Some(trsync_oid),
                 Box::new(move |params| {
-                    let decision = crate::remote_trigger::relay_decision(
+                    let decision = motion_services::remote_trigger::relay_decision(
                         params.try_get_u32("can_trigger"),
                         fired.load(Ordering::SeqCst),
                     );
-                    if decision != crate::remote_trigger::RelayAction::Fire {
+                    if decision != motion_services::remote_trigger::RelayAction::Fire {
                         return;
                     }
                     fired.store(true, Ordering::SeqCst);
@@ -266,7 +268,8 @@ impl PyMotionEngine {
                             mcu_handle,
                         ))
                         .unwrap_or(0);
-                    let clock64 = crate::remote_trigger::relay_trip_clock(clock32, reference);
+                    let clock64 =
+                        motion_services::remote_trigger::relay_trip_clock(clock32, reference);
                     tracing::info!(
                         subsystem = "trip-relay",
                         event = "remote_trigger_fired",
@@ -329,7 +332,7 @@ impl PyMotionEngine {
         host_now: f64,
         axis: Option<u8>,
     ) -> PyResult<std::collections::HashMap<String, (f64, f64, f64)>> {
-        let configs: Vec<crate::mcu_config::McuAxisConfig> =
+        let configs: Vec<motion_core::mcu_config::McuAxisConfig> =
             self.mcu_axis_configs.lock_ok().clone();
         if configs.is_empty() {
             return Err(PyRuntimeError::new_err(
@@ -338,9 +341,9 @@ impl PyMotionEngine {
         }
         let query_host = {
             let router = self.router.lock_ok();
-            crate::motion_history::clock_to_host(
+            motion_core::motion_history::clock_to_host(
                 &router,
-                crate::types::mcu_handle_from_raw(source_mcu),
+                motion_core::types::mcu_handle_from_raw(source_mcu),
                 clock,
             )
             .map_err(PyRuntimeError::new_err)?
@@ -354,22 +357,22 @@ impl PyMotionEngine {
             .find(|c| c.axes.contains(&0usize))
             .map(|c| c.kinematics)
             .unwrap_or(motion_core::kinematics::KinematicsKind::Cartesian as u8);
-        let kin = crate::kinematics::KinematicsModule::from_tag(kin_tag)
+        let kin = motion_core::kinematics::KinematicsModule::from_tag(kin_tag)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let required = required_motor_axes(kin.kind(), axis).map_err(|axis| {
             PyRuntimeError::new_err(format!("motion_state_at: unnamed axis {axis}"))
         })?;
-        let resolved: Vec<crate::types::AxisKey> = configs
+        let resolved: Vec<motion_core::types::AxisKey> = configs
             .iter()
             .flat_map(|cfg| {
-                cfg.axes.iter().map(|&axis| crate::types::AxisKey {
+                cfg.axes.iter().map(|&axis| motion_core::types::AxisKey {
                     mcu_id: cfg.mcu_id,
                     axis: axis as u8,
                 })
             })
             .collect();
         let store = self.motion_history.lock_ok();
-        let mut motor_state: [Option<crate::motion_history::AxisState>; 4] = [None; 4];
+        let mut motor_state: [Option<motion_core::motion_history::AxisState>; 4] = [None; 4];
         for key in resolved {
             let axis = key.axis as usize;
             if axis >= motor_state.len() {
@@ -383,8 +386,8 @@ impl PyMotionEngine {
             }
             match history_state_at_query(&store, key, source_mcu, clock, query_host, host_now) {
                 Ok(st) => motor_state[axis] = Some(st),
-                Err(crate::motion_history::HistoryError::NoHistoryForAxis(_)) => {}
-                Err(e @ crate::motion_history::HistoryError::BeforeRetainedWindow { .. }) => {
+                Err(motion_core::motion_history::HistoryError::NoHistoryForAxis(_)) => {}
+                Err(e @ motion_core::motion_history::HistoryError::BeforeRetainedWindow { .. }) => {
                     let Some(initial) = store.initial_hold_state(key) else {
                         return Err(PyRuntimeError::new_err(e.to_string()));
                     };
@@ -394,7 +397,7 @@ impl PyMotionEngine {
             }
         }
         drop(store);
-        let machine = crate::motion_history::assemble_cartesian_state(motor_state, &kin);
+        let machine = motion_core::motion_history::assemble_cartesian_state(motor_state, &kin);
         self.cartesian_state_to_gcode(machine)
     }
 }
@@ -420,11 +423,11 @@ impl PyMotionEngine {
             })?;
         Ok(ResolvedHomingTarget {
             all_axis_keys,
-            axis_key: crate::types::AxisKey { mcu_id, axis },
+            axis_key: motion_core::types::AxisKey { mcu_id, axis },
         })
     }
 
-    fn homing_pump_tx(&self) -> PyResult<crossbeam_channel::Sender<crate::pump::PumpMsg>> {
+    fn homing_pump_tx(&self) -> PyResult<crossbeam_channel::Sender<motion_core::pump::PumpMsg>> {
         self.pump
             .tx
             .lock_ok()
@@ -438,7 +441,7 @@ impl PyMotionEngine {
         py.detach(|| {
             let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
             pump_tx
-                .send(crate::pump::PumpMsg::Barrier(ack_tx))
+                .send(motion_core::pump::PumpMsg::Barrier(ack_tx))
                 .map_err(|_| "home_axis: pump control channel closed".to_string())?;
             ack_rx
                 .recv_timeout(Duration::from_secs(5))
@@ -488,16 +491,16 @@ impl PyMotionEngine {
     fn flush_aborted_cohort(
         &self,
         py: Python<'_>,
-        all_axis_keys: Vec<crate::types::AxisKey>,
+        all_axis_keys: Vec<motion_core::types::AxisKey>,
         cohort: u64,
     ) -> bool {
         let Some(tx) = self.pump.tx.lock_ok().clone() else {
             return true;
         };
-        let _ = tx.send(crate::pump::PumpMsg::Flush(all_axis_keys));
-        let _ = tx.send(crate::pump::PumpMsg::DripDisarm(cohort));
+        let _ = tx.send(motion_core::pump::PumpMsg::Flush(all_axis_keys));
+        let _ = tx.send(motion_core::pump::PumpMsg::DripDisarm(cohort));
         let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
-        let _ = tx.send(crate::pump::PumpMsg::Barrier(ack_tx));
+        let _ = tx.send(motion_core::pump::PumpMsg::Barrier(ack_tx));
         let barrier = py.detach(move || ack_rx.recv_timeout(std::time::Duration::from_secs(1)));
         if barrier.is_err() {
             tracing::error!(
@@ -512,11 +515,11 @@ impl PyMotionEngine {
 
     fn reconcile_aborted_position(
         &self,
-        axis_key: crate::types::AxisKey,
+        axis_key: motion_core::types::AxisKey,
     ) -> Result<geometry::MachinePos, ()> {
         let final_cartesian = {
             let configs = self.mcu_axis_configs.lock_ok();
-            crate::homing::final_cartesian_position(&configs, &self.motion_history)
+            motion_core::homing::final_cartesian_position(&configs, &self.motion_history)
         };
         final_cartesian.map_err(|e| {
             tracing::error!(
@@ -536,7 +539,7 @@ impl PyMotionEngine {
         let Some(planner) = planner_guard.as_ref() else {
             return true;
         };
-        let open_result = planner.stream_open(crate::mcu_config::reanchor_stream_pos(gcode));
+        let open_result = planner.stream_open(motion_core::mcu_config::reanchor_stream_pos(gcode));
         if let Err(e) = open_result {
             tracing::error!(
                 event = "home_abort_stream_open_failed",

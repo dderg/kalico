@@ -3,7 +3,7 @@ use super::stepcompress_sink::StepcompressEndpoint;
 use super::{AxisFrame, AxisKey, DrainTick, SendError, SpanSink};
 use crate::axis_transport::AxisTransports;
 use crate::lock_ext::LockExt;
-use ethercat_setpoint::setpoint_fill::ChainFiller;
+use ethercat_setpoint_fill::setpoint_fill::ChainFiller;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -20,7 +20,7 @@ pub type RingFiller = Arc<Mutex<ChainFiller>>;
 /// for an EtherCAT mcu is only a grid clock when the router clocks that mcu
 /// at 1 GHz. Anything else means the arming instant and the grid it must be
 /// placed on are two different clocks.
-pub const DC_GRID_CLOCK_FREQ_HZ: f64 = ethercat_setpoint::setpoint_fill::CLOCK_FREQ_HZ;
+pub const DC_GRID_CLOCK_FREQ_HZ: f64 = ethercat_setpoint_fill::setpoint_fill::CLOCK_FREQ_HZ;
 
 /// Cycles the filler covers in one `PushSampleRuns`, and therefore the ring
 /// headroom a lane must report before the pump ships another window. The
