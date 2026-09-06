@@ -5,7 +5,6 @@ use super::*;
 use crate::lock_ext::LockExt;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use trajectory::ClockedMotorSpan;
 
@@ -47,7 +46,6 @@ fn pump_with_pushed(pushed: u32) -> Pump<NullSink> {
         history: None,
         ledger: Arc::new(crate::drain::DrainLedger::new()),
         pending_barrier_acks: Vec::new(),
-        backlog: Arc::new(AtomicU64::new(0)),
         release_plan: crate::pump::ReleasePlan::default(),
         data_open: true,
         intake_batch_open: false,

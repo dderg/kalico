@@ -6,7 +6,6 @@
 use super::*;
 use crate::lock_ext::LockExt;
 use crossbeam_channel::unbounded;
-use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use trajectory::{
@@ -135,7 +134,6 @@ fn with_pump(
             },
             None,
             Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
     body(&ctl, &data);

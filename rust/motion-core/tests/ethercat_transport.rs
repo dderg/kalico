@@ -1,5 +1,4 @@
 use crossbeam_channel::unbounded;
-use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -119,7 +118,6 @@ fn pump_routes_both_serial_and_ethercat_mcu_ids() {
             PumpCallbacks::noop(8),
             None,
             std::sync::Arc::new(motion_core::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -189,7 +187,6 @@ fn heartbeat_retirement_drains_pump_ledger() {
             PumpCallbacks::noop(8),
             None,
             ledger_pump,
-            Arc::new(AtomicU64::new(0)),
         );
     });
 

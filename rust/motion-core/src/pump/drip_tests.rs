@@ -1,7 +1,6 @@
 use super::*;
 use crate::lock_ext::LockExt;
 use crossbeam_channel::unbounded;
-use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use trajectory::{ClockedMotorSpan, ContinuousAxis, MotorGroup, MotorSpan, MotorTerm};
@@ -110,7 +109,6 @@ fn stall_detection_fires_when_floor_stuck() {
             },
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -173,7 +171,6 @@ fn advancing_lane_does_not_hide_a_stalled_lane() {
             },
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -259,7 +256,6 @@ fn fully_executed_cohort_awaiting_trip_is_not_a_stall() {
             },
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -335,7 +331,6 @@ fn a_cohort_releases_its_lanes_in_lockstep() {
             },
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -412,7 +407,6 @@ fn idle_participant_does_not_pin_the_cohort_floor() {
             },
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -490,7 +484,6 @@ fn non_participant_enqueue_aborts_cohort_and_drops_spans() {
             },
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -558,7 +551,6 @@ fn participant_release_tracks_mcu_clock_horizon() {
             },
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -639,7 +631,6 @@ fn unsynced_clock_releases_nothing_for_participants() {
             PumpCallbacks::noop(64),
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
     std::thread::sleep(Duration::from_millis(100));
@@ -674,7 +665,6 @@ fn retired_regression_triggers_on_drip_stall() {
             },
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -730,7 +720,6 @@ fn mcu_reboot_retired_to_zero_triggers_regression() {
             },
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -806,7 +795,6 @@ fn drip_disarm_clears_cohort() {
             },
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -865,7 +853,6 @@ fn drip_disarm_wrong_cohort_id_is_noop() {
             },
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 

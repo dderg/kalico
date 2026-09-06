@@ -281,7 +281,16 @@ impl PyMotionEngine {
         (t0 + last_move_time - host_now).max(0.0)
     }
     fn pump_backlog(&self) -> u64 {
-        self.pump.backlog.load(Ordering::Acquire)
+        if self
+            .pump
+            .thread
+            .lock_ok()
+            .as_ref()
+            .is_none_or(std::thread::JoinHandle::is_finished)
+        {
+            return 0;
+        }
+        self.drain.staged_total()
     }
     fn motion_lead_secs(&self) -> f64 {
         motion_core::anchor::DEFAULT_LEAD_SECS

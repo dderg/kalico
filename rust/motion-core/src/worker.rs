@@ -170,7 +170,6 @@ pub struct PumpResources {
     pub callbacks: crate::pump::PumpCallbacks,
     pub history: crate::pump::HistoryRecorder,
     pub drain: Arc<crate::drain::DrainLedger>,
-    pub backlog: Arc<AtomicU64>,
 }
 
 /// Clock-domain and bookkeeping resources the dispatcher anchors segments
@@ -247,7 +246,6 @@ pub fn setup_pipeline(
                 callbacks,
                 Some(pump.history),
                 pump.drain,
-                pump.backlog,
             );
         })
         .expect("spawn push-pieces-pump thread");

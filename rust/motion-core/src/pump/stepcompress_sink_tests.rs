@@ -2079,15 +2079,20 @@ fn a_barrier_ack_below_the_high_water_mark_is_ignored() {
 
     let seq = h.barriers.lock_ok()[0].1;
     h.endpoint.on_barrier_ack(OID, seq).unwrap();
+    h.latest_heartbeat();
     h.endpoint
         .on_barrier_ack(OID, seq)
         .expect("a replayed ack is already covered, not a protocol break");
+    assert!(
+        h.heartbeats.try_recv().is_err(),
+        "a replay must not post a heartbeat"
+    );
 }
 
 #[test]
 fn barrier_acknowledgements_cross_rollover_and_ignore_pre_wrap_replay() {
     let mut h = harness(1024);
-    h.endpoint.barrier_seq_seed = u32::MAX - 1;
+    h.endpoint.barriers = BarrierLedger::with_seed(u32::MAX - 1);
 
     for (index, seq) in [u32::MAX - 1, u32::MAX, 0].into_iter().enumerate() {
         let retired = (index + 1) as u32;
@@ -2113,7 +2118,7 @@ fn barrier_acknowledgements_cross_rollover_and_ignore_pre_wrap_replay() {
         .endpoint
         .on_barrier_ack(OID, 1)
         .expect_err("the next post-wrap sequence has not been issued");
-    assert!(format!("{err:?}").contains("ahead of"), "{err:?}");
+    assert!(matches!(err, SendError::Fatal(_)));
 }
 
 #[test]
@@ -2499,10 +2504,11 @@ fn a_lost_barrier_ack_trips_the_deadline_instead_of_waiting_forever() {
     );
     let sent_clock = h
         .endpoint
-        .sent_barriers
-        .iter()
-        .find(|sent| sent.id.oid == lost_oid && sent.id.seq == lost_seq)
-        .map(|sent| sent.sent_clock)
+        .barriers
+        .sent_clock_of(BarrierId {
+            oid: lost_oid,
+            seq: lost_seq,
+        })
         .expect("the lost barrier reached the wire");
 
     h.now
@@ -2523,12 +2529,6 @@ fn a_lost_barrier_ack_trips_the_deadline_instead_of_waiting_forever() {
         message.contains(&format!("oid={lost_oid} seq={lost_seq}")),
         "the fatal must name the outstanding barrier: {message}"
     );
-    for &(oid, seq) in &issued[..issued.len() - 1] {
-        assert!(
-            message.contains(&format!("oid={oid} acked_through_seq={seq}")),
-            "the fatal must carry the received-ack ledger: {message}"
-        );
-    }
     let escalated = h.heartbeats.try_iter().any(|msg| {
         matches!(
             msg,

@@ -1,4 +1,3 @@
-use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::{Receiver, TrySendError, unbounded};
@@ -97,7 +96,6 @@ fn pump_stalls_on_ring_full_resumes_on_heartbeat() {
             PumpCallbacks::noop(2),
             None,
             std::sync::Arc::new(motion_core::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         )
     });
 
@@ -164,7 +162,6 @@ fn run_pump_with_clock(
             },
             None,
             std::sync::Arc::new(motion_core::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         )
     })
 }
@@ -414,7 +411,6 @@ fn bundles_same_mcu_axes_into_one_transaction() {
             PumpCallbacks::noop(8),
             None,
             std::sync::Arc::new(motion_core::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         )
     });
 
@@ -474,7 +470,6 @@ fn intake_backpressures_at_backlog_cap_and_resumes_on_retirement() {
             PumpCallbacks::noop(4),
             None,
             std::sync::Arc::new(motion_core::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         )
     });
 
@@ -567,7 +562,6 @@ fn intake_feeds_a_second_axis_even_when_the_first_axis_ring_is_full() {
             },
             None,
             std::sync::Arc::new(motion_core::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         )
     });
 
@@ -643,7 +637,6 @@ fn drip_cohort_finishes_over_cap_projection_batch_before_backpressuring() {
             },
             None,
             std::sync::Arc::new(motion_core::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         )
     });
 

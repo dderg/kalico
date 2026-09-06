@@ -1933,6 +1933,7 @@ impl SampleEndpoint {
                 AckFault::Regressed { high_water } => {
                     format!("it walks the high-water mark {high_water} backwards")
                 }
+                AckFault::OutOfOrder { expected } => format!("expected sequence {expected}"),
             };
             return Err(SendError::Fatal(format!(
                 "sample endpoint mcu {mcu_id}: barrier ack oid={oid} seq={seq} is bogus — \

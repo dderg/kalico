@@ -1,6 +1,6 @@
 use motion_core::lock_ext::LockExt;
 use std::os::unix::io::FromRawFd;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use host_rt::host_io::{McuHostIo, McuHostIoConfig};
@@ -795,7 +795,6 @@ fn shutdown_does_not_abort_on_detached_ethercat_weak() {
                 },
                 None,
                 std::sync::Arc::new(motion_core::drain::DrainLedger::new()),
-                Arc::new(AtomicU64::new(0)),
             );
         })
         .expect("spawn test pump thread");

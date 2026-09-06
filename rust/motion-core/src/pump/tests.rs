@@ -6,7 +6,7 @@ use super::*;
 use crate::lock_ext::LockExt;
 use crossbeam_channel::unbounded;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -217,7 +217,6 @@ fn run_pump_delivers_span_despite_retired_over_pushed_inversion() {
             PumpCallbacks::noop(RING_DEPTH),
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -285,7 +284,6 @@ fn history_records_spans_at_send_time_not_enqueue_time() {
             PumpCallbacks::noop(RING_DEPTH),
             Some(history),
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -424,7 +422,6 @@ fn overlay_span_after_move_is_exempt_from_junction_continuity() {
             },
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
     let key = AxisKey { mcu_id: 1, axis: 2 };
@@ -541,7 +538,6 @@ fn endpoint_fatal_hands_its_reason_to_the_fatal_transport_action() {
             },
             None,
             Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
     let error = "queue_step oid 9 is 2077 us behind the projected mcu clock".to_string();
@@ -593,7 +589,6 @@ fn flush_clears_queued_spans_and_junctions() {
             },
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -683,7 +678,6 @@ fn on_abandon_reports_flushed_not_pushed_spans() {
             },
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -746,7 +740,6 @@ fn flush_unknown_key_is_noop() {
             PumpCallbacks::noop(64),
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
 
@@ -766,8 +759,8 @@ fn barrier_ack_means_flushed_axes_emit_nothing() {
     let sink = RecordingSink::new();
     let (ctl, control_rx) = unbounded::<PumpMsg>();
     let (data, data_rx) = unbounded::<EnqueueMsg>();
-    let backlog = Arc::new(AtomicU64::new(0));
-    let backlog_pump = Arc::clone(&backlog);
+    let ledger = Arc::new(crate::drain::DrainLedger::new());
+    let ledger_pump = Arc::clone(&ledger);
 
     let sink_clone = sink.clone();
     let handle = std::thread::spawn(move || {
@@ -777,8 +770,7 @@ fn barrier_ack_means_flushed_axes_emit_nothing() {
             sink_clone,
             PumpCallbacks::noop(0),
             None,
-            std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            backlog_pump,
+            ledger_pump,
         );
     });
 
@@ -789,7 +781,7 @@ fn barrier_ack_means_flushed_axes_emit_nothing() {
     ))
     .unwrap();
     poll_until(
-        || backlog.load(Ordering::Acquire) == 3,
+        || ledger.staged_total() == 3,
         "ring-full pump never staged the 3 un-pushed spans",
     );
 
@@ -801,10 +793,7 @@ fn barrier_ack_means_flushed_axes_emit_nothing() {
         .recv_timeout(std::time::Duration::from_secs(2))
         .expect("barrier must be acknowledged");
 
-    poll_until(
-        || backlog.load(Ordering::Acquire) == 0,
-        "Flush must clear the staged backlog",
-    );
+    assert_eq!(ledger.staged_total(), 0);
 
     ctl.send(PumpMsg::Shutdown).unwrap();
     handle.join().unwrap();
@@ -828,7 +817,6 @@ fn barrier_acks_on_idle_pump() {
             PumpCallbacks::noop(8),
             None,
             std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            Arc::new(AtomicU64::new(0)),
         );
     });
     let (ack_tx, ack_rx) = mpsc::sync_channel(1);
@@ -849,43 +837,9 @@ fn poll_until<F: Fn() -> bool>(pred: F, what: &str) {
 }
 
 #[test]
-fn pump_backlog_reflects_unpushed_spans() {
-    let backlog = Arc::new(AtomicU64::new(0));
-    let backlog_thread = Arc::clone(&backlog);
-    let (ctl, control_rx) = unbounded::<PumpMsg>();
-    let (data, data_rx) = unbounded::<EnqueueMsg>();
-    let handle = std::thread::spawn(move || {
-        run_pump(
-            control_rx,
-            data_rx,
-            RecordingSink::new(),
-            PumpCallbacks::noop(0),
-            None,
-            std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            backlog_thread,
-        );
-    });
-
-    data.send(make_enqueue(
-        AxisKey { mcu_id: 1, axis: 0 },
-        (0..3).map(make_span).collect(),
-        crate::anchor::StreamEpoch::Continuation,
-    ))
-    .unwrap();
-
-    poll_until(
-        || backlog.load(Ordering::Acquire) == 3,
-        "ring-full pump never reported the 3 unpushed spans",
-    );
-
-    ctl.send(PumpMsg::Shutdown).unwrap();
-    handle.join().unwrap();
-}
-
-#[test]
 fn pump_backlog_drains_to_zero_when_pushed() {
-    let backlog = Arc::new(AtomicU64::new(0));
-    let backlog_thread = Arc::clone(&backlog);
+    let ledger = Arc::new(crate::drain::DrainLedger::new());
+    let ledger_thread = Arc::clone(&ledger);
     let sink = RecordingSink::new();
     let sink_clone = sink.clone();
     let (ctl, control_rx) = unbounded::<PumpMsg>();
@@ -897,8 +851,7 @@ fn pump_backlog_drains_to_zero_when_pushed() {
             sink_clone,
             PumpCallbacks::noop(8),
             None,
-            std::sync::Arc::new(crate::drain::DrainLedger::new()),
-            backlog_thread,
+            ledger_thread,
         );
     });
 
@@ -909,9 +862,12 @@ fn pump_backlog_drains_to_zero_when_pushed() {
     ))
     .unwrap();
 
-    poll_until(|| !sink.recorded().is_empty(), "pump never pushed spans");
     poll_until(
-        || backlog.load(Ordering::Acquire) == 0,
+        || sink.recorded().last() == Some(&3),
+        "pump never pushed all spans",
+    );
+    poll_until(
+        || ledger.staged_total() == 0,
         "backlog never returned to zero after the ring consumed the spans",
     );
 
@@ -944,7 +900,6 @@ fn queue_pump<S: SpanSink>(
         history: None,
         ledger: Arc::new(crate::drain::DrainLedger::new()),
         pending_barrier_acks: Vec::new(),
-        backlog: Arc::new(AtomicU64::new(0)),
         release_plan: crate::pump::ReleasePlan::default(),
         data_open: true,
         intake_batch_open: false,
@@ -1337,7 +1292,7 @@ fn run_loop_re_observes_a_wedged_ring_with_both_channels_silent() {
     let (_ctl, control_rx) = unbounded::<PumpMsg>();
     let (_data, data_rx) = unbounded::<EnqueueMsg>();
 
-    let pumping = std::thread::spawn(move || pump.run(control_rx, data_rx));
+    let pumping = std::thread::spawn(move || pump.run(&control_rx, &data_rx));
 
     let message = escalated_rx
         .recv_timeout(Duration::from_secs(2))
@@ -1380,7 +1335,6 @@ fn buzz_fixture() -> BuzzFixture {
         history: None,
         ledger: Arc::new(crate::drain::DrainLedger::new()),
         pending_barrier_acks: Vec::new(),
-        backlog: Arc::new(AtomicU64::new(0)),
         release_plan: crate::pump::ReleasePlan::default(),
         data_open: true,
         intake_batch_open: false,

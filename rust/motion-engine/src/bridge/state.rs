@@ -292,14 +292,13 @@ impl Default for FlushState {
     }
 }
 
-/// The pump's control handle, join handle, backlog counter and the per-lane-kind
+/// The pump's control handle, join handle and the per-lane-kind
 /// pacers — set together by `spawn_pipeline` and torn down together by
 /// `shutdown`.
 #[derive(Default)]
 pub(crate) struct PumpHandles {
     pub(crate) tx: Arc<Mutex<Option<crossbeam_channel::Sender<motion_core::pump::PumpMsg>>>>,
     pub(crate) thread: Mutex<Option<JoinHandle<()>>>,
-    pub(crate) backlog: Arc<AtomicU64>,
     pub(crate) pacer: Mutex<Option<motion_core::pump::StepcompressPacer>>,
     pub(crate) sample_pacer: Mutex<Option<motion_core::pump::SamplePacer>>,
 }

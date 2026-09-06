@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Select, TryRecvError};
@@ -138,7 +137,6 @@ pub(super) struct Pump<S> {
     pub(super) history: Option<HistoryRecorder>,
     pub(super) ledger: Arc<crate::drain::DrainLedger>,
     pub(super) pending_barrier_acks: Vec<std::sync::mpsc::SyncSender<()>>,
-    pub(super) backlog: Arc<AtomicU64>,
     pub(super) release_plan: ReleasePlan,
     pub(super) data_open: bool,
     pub(super) intake_batch_open: bool,
@@ -1344,12 +1342,7 @@ impl<S: SpanSink> Pump<S> {
         self.ledger.publish(snapshot);
     }
 
-    pub(super) fn run(&mut self, control_rx: Receiver<PumpMsg>, data_rx: Receiver<EnqueueMsg>) {
-        self.run_loop(&control_rx, &data_rx);
-        self.backlog.store(0, Ordering::Release);
-    }
-
-    fn run_loop(&mut self, control_rx: &Receiver<PumpMsg>, data_rx: &Receiver<EnqueueMsg>) {
+    pub(super) fn run(&mut self, control_rx: &Receiver<PumpMsg>, data_rx: &Receiver<EnqueueMsg>) {
         loop {
             let mut activity = false;
 
@@ -1378,9 +1371,6 @@ impl<S: SpanSink> Pump<S> {
                 Err(()) => return,
             };
 
-            let unpushed: u64 = self.queues.values().map(|q| q.spans.len() as u64).sum();
-            self.backlog.store(unpushed, Ordering::Release);
-
             if activity {
                 continue;
             }
@@ -1401,7 +1391,6 @@ pub fn run_pump<S: SpanSink>(
     callbacks: PumpCallbacks,
     history: Option<HistoryRecorder>,
     ledger: Arc<crate::drain::DrainLedger>,
-    backlog: Arc<AtomicU64>,
 ) {
     let mut pump = Pump {
         queues: BTreeMap::new(),
@@ -1413,12 +1402,11 @@ pub fn run_pump<S: SpanSink>(
         history,
         ledger,
         pending_barrier_acks: Vec::new(),
-        backlog,
         release_plan: ReleasePlan::default(),
         data_open: true,
         intake_batch_open: false,
         consumption_stall: ConsumptionStallWatch::new(CONSUMPTION_STALL_FATAL),
         mem_probe: MemPressureProbe::new(),
     };
-    pump.run(control_rx, data_rx);
+    pump.run(&control_rx, &data_rx);
 }

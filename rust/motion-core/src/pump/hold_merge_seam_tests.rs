@@ -11,7 +11,6 @@ use super::{AxisKey, AxisQueue, EnqueueMsg, PumpCallbacks, PumpMsg, SendError, S
 use crate::pump::MAX_LEAD_SECS;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use trajectory::{
     ClockedMotorSpan, ContinuousAxis, MAX_SPAN_SECS, MotorGroup, MotorSpan, MotorTerm,
 };
@@ -190,7 +189,6 @@ fn pump_with(callbacks: PumpCallbacks) -> Pump<NullSink> {
         history: None,
         ledger: Arc::new(crate::drain::DrainLedger::new()),
         pending_barrier_acks: Vec::new(),
-        backlog: Arc::new(AtomicU64::new(0)),
         release_plan: crate::pump::ReleasePlan::default(),
         data_open: true,
         intake_batch_open: false,

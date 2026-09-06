@@ -391,7 +391,6 @@ impl PyMotionEngine {
                 store: Arc::clone(&self.motion_history),
             },
             drain: drain_for_pump,
-            backlog: Arc::clone(&self.pump.backlog),
         })
     }
 

@@ -2,7 +2,7 @@
 //!
 //! The pump is the single owner of every per-axis counter that matters here
 //! (`pending` staged pieces, accepted `pushed`, playback `retired`, and `abandoned`)
-//! and publishes a snapshot of them after every loop iteration. Readers only
+//! and publishes one snapshot per loop before barrier acknowledgements. Readers only
 //! ever compare counters that were written together, in the same unit, by the
 //! same thread — there is no parallel ledger to drift out of sync.
 //!
@@ -65,6 +65,14 @@ impl DrainLedger {
         *axes = snapshot;
         drop(axes);
         self.cv.notify_all();
+    }
+
+    pub fn staged_total(&self) -> u64 {
+        self.axes
+            .lock_ok()
+            .values()
+            .map(|axis| u64::from(axis.pending))
+            .sum()
     }
 
     pub fn drained(&self) -> bool {
