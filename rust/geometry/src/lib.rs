@@ -32,7 +32,6 @@ pub use surface::{
     SurfaceTransform, SurfaceTransition, SurfaceTransitionError,
 };
 pub use velocity::{
-    BoundaryState, LawSegment, MoveVelocity, ScalarLaw, VelSample, VelocityError, VelocityProfile,
-    VelocityReport, plan_velocity_stops, plan_velocity_stops_reconstruct_prefix,
-    plan_velocity_stops_select_prefix,
+    LawSegment, MoveVelocity, ScalarLaw, VelSample, VelocityError, VelocityProfile, VelocityReport,
+    plan_velocity_stops, plan_velocity_stops_reconstruct_prefix, plan_velocity_stops_select_prefix,
 };

@@ -74,7 +74,6 @@ pub(super) fn member_profile(
     let reversed = Kinematics {
         length: kin.length,
         accel: kin.accel,
-        jerk: kin.jerk,
         kappa0: kin.kappa0 + kin.sigma * kin.length,
         sigma: -kin.sigma,
         flat_ceiling: kin.flat_ceiling,

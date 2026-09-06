@@ -1,5 +1,5 @@
 use super::{
-    DRAIN_TIMEOUT, FlushWait, HashMap, Ordering, PyMotionEngine, PyResult, PyRuntimeError, Python,
+    HashMap, Ordering, PyMotionEngine, PyResult, PyRuntimeError, Python,
     collect_motor_positions_inner, planner_err, pymethods,
 };
 use host_rt::clock::{HostSecs, PrintTime};
@@ -53,80 +53,6 @@ impl PyMotionEngine {
             &format!("(motor_idx={motor_idx} bus_id={bus_id} cs_pin_id={cs_pin_id})"),
         )
     }
-    /// Blocking on the planner mutex while the GIL is held deadlocks against
-    /// any path that holds the mutex across a GIL re-attach, so the lock is
-    /// only ever taken inside the detached closure.
-    fn wait_moves(&self, py: Python<'_>) -> PyResult<()> {
-        py.detach(|| flush_planner_detached(&self.planner))
-    }
-    fn drain_motion(&self, py: Python<'_>) -> PyResult<()> {
-        py.detach(|| flush_planner_detached(&self.planner))?;
-        let drain = self.drain.clone();
-        py.detach(|| drain.wait_drained(DRAIN_TIMEOUT))
-            .map_err(PyRuntimeError::new_err)
-    }
-    fn wait_moves_start(&self) -> PyResult<u64> {
-        let rx = self.flush_try_start_inner()?;
-        let mut pending = self.flush.pending.lock_ok();
-        let id = self.flush.next_id.fetch_add(1, Ordering::Relaxed);
-        pending.insert(id, FlushWait { rx, deadline: None });
-        Ok(id)
-    }
-
-    fn wait_moves_poll(&self, flush_id: u64) -> PyResult<bool> {
-        let started_rx = {
-            let pending = self.flush.pending.lock_ok();
-            let Some(wait) = pending.get(&flush_id) else {
-                return Err(PyRuntimeError::new_err(format!(
-                    "wait_moves_poll: unknown flush id {flush_id}"
-                )));
-            };
-            wait.rx.is_some()
-        };
-        let late_rx = if started_rx {
-            None
-        } else {
-            match self.flush_try_start_inner()? {
-                Some(rx) => Some(rx),
-                None => return Ok(false),
-            }
-        };
-        let mut pending = self.flush.pending.lock_ok();
-        let Some(wait) = pending.get_mut(&flush_id) else {
-            return Err(PyRuntimeError::new_err(format!(
-                "wait_moves_poll: unknown flush id {flush_id}"
-            )));
-        };
-        if let Some(rx) = late_rx {
-            wait.rx = Some(rx);
-        }
-        if wait.deadline.is_none() {
-            let rx = wait
-                .rx
-                .as_ref()
-                .expect("flush receiver present past the try-start gate");
-            match rx.try_recv() {
-                Ok(finish) => {
-                    wait.deadline = Some(finish.unwrap_or_else(std::time::Instant::now));
-                }
-                Err(crossbeam_channel::TryRecvError::Empty) => return Ok(false),
-                Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                    pending.remove(&flush_id);
-                    return Err(PyRuntimeError::new_err(
-                        "wait_moves_poll: planner channel closed",
-                    ));
-                }
-            }
-        }
-        let done = wait
-            .deadline
-            .map(|d| std::time::Instant::now() >= d)
-            .unwrap_or(false);
-        if done {
-            pending.remove(&flush_id);
-        }
-        Ok(done)
-    }
     fn motion_drain_poll(&self) -> PyResult<bool> {
         self.report_lagging_drain_wait();
         let mut pending = self.flush.pending_drain.lock_ok();
@@ -140,7 +66,7 @@ impl PyMotionEngine {
             .as_ref()
             .expect("drain flush receiver just installed");
         match rx.try_recv() {
-            Ok(_committed_through) => {
+            Ok(()) => {
                 *pending = None;
                 let drained = self.drain.drained();
                 if drained {
@@ -411,7 +337,6 @@ impl PyMotionEngine {
         };
         let timeout = std::time::Duration::from_secs_f64(timeout_s);
         let params = py.detach(|| -> PyResult<_> {
-            use host_rt::transport::Transport;
             io.call(request, response, timeout)
                 .map_err(|e| PyRuntimeError::new_err(format!("{op}: transport error: {e:?}")))
         })?;
@@ -480,9 +405,7 @@ impl PyMotionEngine {
         );
     }
 
-    fn flush_try_start_inner(
-        &self,
-    ) -> PyResult<Option<crossbeam_channel::Receiver<Option<std::time::Instant>>>> {
+    fn flush_try_start_inner(&self) -> PyResult<Option<crossbeam_channel::Receiver<()>>> {
         let guard = self.planner.lock_ok();
         let planner = guard.as_ref().ok_or_else(|| {
             PyRuntimeError::new_err("planner not initialized — call init_planner first")
@@ -493,14 +416,4 @@ impl PyMotionEngine {
             Err(e) => Err(planner_err(e)),
         }
     }
-}
-
-fn flush_planner_detached(
-    planner: &std::sync::Mutex<Option<motion_core::worker::StreamWorkerHandle>>,
-) -> PyResult<()> {
-    let guard = planner.lock_ok();
-    let handle = guard.as_ref().ok_or_else(|| {
-        PyRuntimeError::new_err("planner not initialized — call init_planner first")
-    })?;
-    handle.flush().map_err(planner_err)
 }

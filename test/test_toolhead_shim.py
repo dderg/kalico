@@ -86,46 +86,17 @@ def test_toolhead_method_surface_complete(toolhead_fixture):
     assert missing == []
 
 
-class _RecordingEngine(_FakeEngine):
-    def __init__(self, duration):
-        super().__init__(
-            motion_lead_secs=0.25,
-            fence_start=1,
-            fence_print_time_poll=0.0,
-        )
-        self._duration = duration
-        self.last_call = None
-        self.dwells = []
-        self.waits = 0
-
-    def wait_moves(self):
-        self.waits += 1
-
-    def submit_dwell(self, delay):
-        self.dwells.append(delay)
-
-    def submit_nudge(
-        self, mcu_id, axis_idx, motor_mask, delta_mm, speed, accel
-    ):
-        self.last_call = dict(
-            kind="nudge",
-            mcu_id=mcu_id,
-            axis_idx=axis_idx,
-            motor_mask=motor_mask,
-            delta_mm=delta_mm,
-            speed=speed,
-            accel=accel,
-        )
-        return self._duration
-
-
-def _make_correction_toolhead(duration):
+def _make_correction_toolhead():
     th = Motion.__new__(Motion)
     th.mcu = FakeMcu(print_time_offset=1.0)
     th.all_mcus = [th.mcu]
     th.kin = None
     th.reactor = FakeReactor(now=100.0)
-    th.engine = _RecordingEngine(duration)
+    th.engine = _FakeEngine(
+        motion_lead_secs=0.25,
+        fence_start=1,
+        fence_print_time_poll=0.0,
+    )
     th.printer = FakePrinter(reactor=th.reactor)
     th.motion_lead = 0.25
     th._engine_wakeup = None
@@ -133,29 +104,6 @@ def _make_correction_toolhead(duration):
 
 
 def test_get_last_move_time_uses_motion_lead():
-    th = _make_correction_toolhead(0.0)
+    th = _make_correction_toolhead()
     th.motion_lead = 0.5
     assert th.get_last_move_time() == pytest.approx(101.5)
-
-
-def test_submit_nudge_builds_single_bit_mask_and_forwards():
-    th = _make_correction_toolhead(0.6)
-    dur = th.submit_nudge(
-        7, 1, 2, 0.3, 80.0, 5000.0
-    )  # motor_idx=2 -> mask 0b100
-    call = th.engine.last_call
-    assert call["kind"] == "nudge"
-    assert (call["mcu_id"], call["axis_idx"], call["motor_mask"]) == (
-        7,
-        1,
-        0b100,
-    )
-    assert call["delta_mm"] == pytest.approx(0.3)
-    assert dur == pytest.approx(0.6)
-    assert th.engine.waits == 0 and th.engine.dwells == []
-
-
-def test_submit_nudge_does_not_bump_host_frontier():
-    th = _make_correction_toolhead(0.6)
-    th.submit_nudge(7, 1, 2, 0.3, 80.0, 5000.0)
-    assert th.engine.waits == 0 and th.engine.dwells == []

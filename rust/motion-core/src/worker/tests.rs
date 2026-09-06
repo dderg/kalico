@@ -77,7 +77,7 @@ impl SegmentSink for DeadPumpSink {
     }
 }
 
-fn cfg() -> StreamConfig {
+pub(super) fn cfg() -> StreamConfig {
     cfg_cap(64)
 }
 
@@ -240,7 +240,6 @@ fn streams_collinear_moves_to_a_contiguous_trajectory() {
         (last.2 - 90.0).abs() < 1e-6,
         "trajectory reaches the final x"
     );
-    assert!(h.commit_fire_count() >= 1);
     h.shutdown();
 }
 
@@ -422,7 +421,7 @@ fn two_consecutive_dwells_accumulate_into_last_move_time() {
 }
 
 #[test]
-fn stream_open_restarts_the_timeline_at_zero() {
+fn reset_restarts_the_timeline_at_zero() {
     let cap = Capture::default();
     let mut h = StreamWorkerHandle::spawn(
         cfg(),
@@ -438,16 +437,15 @@ fn stream_open_restarts_the_timeline_at_zero() {
     h.flush().unwrap();
     let before = cap.snapshot().len();
 
-    h.stream_open(vec![0.0, 0.0, 0.0]).unwrap();
+    h.reset(vec![0.0, 0.0, 0.0]).unwrap();
     h.submit_move(line(2, [0.0, 0.0, 0.0], [30.0, 0.0, 0.0]))
         .unwrap();
     h.flush().unwrap();
 
     let post = cap.snapshot();
-    assert!(post.len() > before);
     assert!(
         (post[before].0 - 0.0).abs() < 1e-9,
-        "post-stream-open timeline must restart at 0, got {}",
+        "post-reset timeline must restart at 0, got {}",
         post[before].0
     );
     h.shutdown();
@@ -472,8 +470,6 @@ fn home_drip_moves_to_the_travel_endpoint_on_the_new_pipeline() {
             direction: 1.0,
             speed_mm_s: 50.0,
             max_travel_mm: 20.0,
-            cohort: 0,
-            participants: Vec::new(),
         })
         .unwrap();
     assert!(rx.recv().unwrap().is_ok());

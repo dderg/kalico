@@ -339,7 +339,7 @@ mod a3_awaiting_response_gc;
 mod a8_fire_and_forget_backpressure;
 
 #[cfg(test)]
-mod fire_and_forget_typed_routing;
+mod fire_and_forget_routing;
 
 #[cfg(test)]
 mod io_fault_propagation;

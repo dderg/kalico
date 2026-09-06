@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
@@ -270,26 +270,10 @@ impl HomingLifecycle {
     }
 }
 
-/// The flush/drain poll bookkeeping `wait_moves_*` and `motion_drain_*` share:
-/// in-flight flush waits keyed by id, the drain-poll's own flush receiver, and
-/// the lagging-wait diagnostic timer.
+#[derive(Default)]
 pub(crate) struct FlushState {
-    pub(crate) pending: Mutex<HashMap<u64, FlushWait>>,
-    pub(crate) pending_drain: Mutex<Option<crossbeam_channel::Receiver<Option<Instant>>>>,
+    pub(crate) pending_drain: Mutex<Option<crossbeam_channel::Receiver<()>>>,
     pub(crate) drain_wait_diag: Mutex<Option<super::drain_wait::DrainWaitDiag>>,
-    /// Starts at 1: id 0 is never handed out.
-    pub(crate) next_id: AtomicU64,
-}
-
-impl Default for FlushState {
-    fn default() -> Self {
-        Self {
-            pending: Mutex::new(HashMap::new()),
-            pending_drain: Mutex::new(None),
-            drain_wait_diag: Mutex::new(None),
-            next_id: AtomicU64::new(1),
-        }
-    }
 }
 
 /// The pump's control handle, join handle and the per-lane-kind
@@ -394,11 +378,4 @@ pub(crate) struct EthercatDrive {
     pub(crate) ff_max_torque: f64,
     pub(crate) invert_direction: bool,
     pub(crate) dynamics_profile: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-
-pub(crate) struct FlushWait {
-    pub(crate) rx: Option<crossbeam_channel::Receiver<Option<std::time::Instant>>>,
-    pub(crate) deadline: Option<std::time::Instant>,
 }

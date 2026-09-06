@@ -53,13 +53,12 @@ fn sink() -> (
         anchor: Arc::new(Mutex::new(crate::anchor::Anchor::new())),
         mcu_configs: vec![stepcompress_cfg()],
         pump_tx: tx,
-        pump_control: None,
+        pump: None,
         counter: Arc::new(AtomicU64::new(0)),
         drip_active: Arc::new(AtomicBool::new(false)),
         motion_history: Arc::new(Mutex::new(crate::motion_history::HistoryStore::default())),
         frontier: Arc::new(super::super::CommittedFrontier::default()),
         frozen_projection: Mutex::new(std::collections::HashMap::new()),
-        transport_fatal: Arc::default(),
     };
     (sink, router, handle, clock)
 }

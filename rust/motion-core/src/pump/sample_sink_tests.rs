@@ -105,8 +105,6 @@ fn harness(lanes: &[SampleLaneConfig]) -> Harness {
         Ok(())
     });
     let (tx, control) = crossbeam_channel::unbounded();
-    let mut endpoint = SampleEndpoint::new(MCU_ID, lanes, egress, clock_of, tx)
-        .expect("lane config is representable");
     let readback = Arc::new(Mutex::new(None));
     let readback_for_query = Arc::clone(&readback);
     let query: SamplePositionQuery = Arc::new(move |_| {
@@ -114,7 +112,8 @@ fn harness(lanes: &[SampleLaneConfig]) -> Harness {
             .lock_ok()
             .ok_or_else(|| "no readback armed".to_string())
     });
-    endpoint.set_position_query(query);
+    let mut endpoint = SampleEndpoint::new(MCU_ID, lanes, egress, clock_of, tx, query)
+        .expect("lane config is representable");
     endpoint
         .reset_position(&vec![0; lanes.len()])
         .expect("seed matches the lane count");
@@ -711,6 +710,7 @@ fn duplicate_axes_are_rejected_at_construction() {
         egress,
         clock_of,
         tx,
+        Arc::new(|_| panic!("invalid config must not query the MCU")),
     ) else {
         panic!("two lanes cannot own one axis");
     };
@@ -730,7 +730,14 @@ fn an_unrepresentable_sample_rate_is_rejected_at_construction() {
     let egress: FrameEgress = Arc::new(|_| Ok(()));
     let mut cfg = lane_cfg(0, OID);
     cfg.sample_rate_hz = 4_000_000;
-    let Err(error) = SampleEndpoint::new(MCU_ID, &[cfg], egress, clock_of, tx) else {
+    let Err(error) = SampleEndpoint::new(
+        MCU_ID,
+        &[cfg],
+        egress,
+        clock_of,
+        tx,
+        Arc::new(|_| panic!("invalid config must not query the MCU")),
+    ) else {
         panic!("a sample rate faster than the clock is not representable");
     };
     let SendError::Fatal(message) = error else {

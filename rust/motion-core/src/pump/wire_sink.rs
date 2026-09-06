@@ -60,28 +60,6 @@ pub struct WireSink {
 }
 
 impl WireSink {
-    fn stepcompress_of(&self, mcu_id: u32) -> Option<&Arc<Mutex<StepcompressEndpoint>>> {
-        self.stepcompress.get(&mcu_id)
-    }
-
-    fn samples_of(&self, mcu_id: u32) -> Option<&Arc<Mutex<SampleEndpoint>>> {
-        self.samples.get(&mcu_id)
-    }
-
-    fn drives_pulse_lane(&self, key: AxisKey) -> bool {
-        self.transports.is_pulse(key)
-            && self
-                .stepcompress_of(key.mcu_id)
-                .is_some_and(|e| e.lock_ok().drives_axis(key.axis))
-    }
-
-    fn drives_sample_lane(&self, key: AxisKey) -> bool {
-        self.transports.is_phase(key)
-            && self
-                .samples_of(key.mcu_id)
-                .is_some_and(|e| e.lock_ok().drives_axis(key.axis))
-    }
-
     /// One `PushSampleRuns` transaction with the endpoint, with the
     /// fatal-vs-transient split the pump's error handling depends on.
     fn call_push_sample_runs(
@@ -308,7 +286,7 @@ impl SpanSink for WireSink {
     }
 
     fn lane_group(&self, key: AxisKey) -> u8 {
-        if self.drives_sample_lane(key) {
+        if self.transports.is_phase(key) {
             LANE_GROUP_PHASE
         } else {
             LANE_GROUP_PULSE
@@ -316,16 +294,21 @@ impl SpanSink for WireSink {
     }
 
     fn mark_reanchor(&self, key: AxisKey, at_start_clock: u64, epoch_freq: Option<f64>) {
-        if self.drives_pulse_lane(key) {
-            self.stepcompress_of(key.mcu_id)
-                .expect("a pulse lane named its own endpoint")
+        if self.ethercat.contains_key(&key.mcu_id) {
+            return;
+        }
+        if self.transports.is_pulse(key) {
+            self.stepcompress
+                .get(&key.mcu_id)
+                .unwrap_or_else(|| panic!("{}", self.no_transport(key, "mark_reanchor")))
                 .lock_ok()
                 .mark_reanchor(key.axis, at_start_clock, epoch_freq);
             return;
         }
-        if self.drives_sample_lane(key) {
-            self.samples_of(key.mcu_id)
-                .expect("a phase lane named its own endpoint")
+        if self.transports.is_phase(key) {
+            self.samples
+                .get(&key.mcu_id)
+                .unwrap_or_else(|| panic!("{}", self.no_transport(key, "mark_reanchor")))
                 .lock_ok()
                 .mark_reanchor(key.axis, at_start_clock, epoch_freq)
                 .unwrap_or_else(|e| {
@@ -338,16 +321,21 @@ impl SpanSink for WireSink {
     }
 
     fn mark_seam_gap(&self, key: AxisKey, at_start_clock: u64) {
-        if self.drives_pulse_lane(key) {
-            self.stepcompress_of(key.mcu_id)
-                .expect("a pulse lane named its own endpoint")
+        if self.ethercat.contains_key(&key.mcu_id) {
+            return;
+        }
+        if self.transports.is_pulse(key) {
+            self.stepcompress
+                .get(&key.mcu_id)
+                .unwrap_or_else(|| panic!("{}", self.no_transport(key, "mark_seam_gap")))
                 .lock_ok()
                 .mark_seam_gap(key.axis, at_start_clock);
             return;
         }
-        if self.drives_sample_lane(key) {
-            self.samples_of(key.mcu_id)
-                .expect("a phase lane named its own endpoint")
+        if self.transports.is_phase(key) {
+            self.samples
+                .get(&key.mcu_id)
+                .unwrap_or_else(|| panic!("{}", self.no_transport(key, "mark_seam_gap")))
                 .lock_ok()
                 .mark_seam_gap(key.axis, at_start_clock)
                 .unwrap_or_else(|e| {
@@ -361,13 +349,13 @@ impl SpanSink for WireSink {
 
     fn on_barrier_ack(&self, mcu_id: u32, oid: u8, seq: u32) -> Result<(), SendError> {
         let oid = u32::from(oid);
-        if let Some(endpoint) = self.stepcompress_of(mcu_id) {
+        if let Some(endpoint) = self.stepcompress.get(&mcu_id) {
             let mut endpoint = endpoint.lock_ok();
             if endpoint.owns_oid(oid) {
                 return endpoint.on_barrier_ack(oid, seq);
             }
         }
-        if let Some(endpoint) = self.samples_of(mcu_id) {
+        if let Some(endpoint) = self.samples.get(&mcu_id) {
             let mut endpoint = endpoint.lock_ok();
             if endpoint.owns_oid(oid) {
                 return endpoint.on_barrier_ack(oid, seq);
@@ -384,25 +372,46 @@ impl SpanSink for WireSink {
         let mut pulse_axes: HashMap<u32, Vec<u8>> = HashMap::new();
         let mut phase_axes: HashMap<u32, Vec<u8>> = HashMap::new();
         for key in keys {
-            if self.drives_pulse_lane(*key) {
+            if self.ethercat.contains_key(&key.mcu_id) {
+                continue;
+            }
+            if self.transports.is_pulse(*key) {
                 pulse_axes.entry(key.mcu_id).or_default().push(key.axis);
             }
-            if self.drives_sample_lane(*key) {
+            if self.transports.is_phase(*key) {
                 phase_axes.entry(key.mcu_id).or_default().push(key.axis);
             }
         }
         for (mcu_id, axes) in pulse_axes {
             credits.extend(
-                self.stepcompress_of(mcu_id)
-                    .expect("pulse lanes named their own endpoint")
+                self.stepcompress
+                    .get(&mcu_id)
+                    .ok_or_else(|| {
+                        self.no_transport(
+                            AxisKey {
+                                mcu_id,
+                                axis: axes[0],
+                            },
+                            "flush_keys",
+                        )
+                    })?
                     .lock_ok()
                     .abort_axes(&axes)?,
             );
         }
         for (mcu_id, axes) in phase_axes {
             credits.extend(
-                self.samples_of(mcu_id)
-                    .expect("phase lanes named their own endpoint")
+                self.samples
+                    .get(&mcu_id)
+                    .ok_or_else(|| {
+                        self.no_transport(
+                            AxisKey {
+                                mcu_id,
+                                axis: axes[0],
+                            },
+                            "flush_keys",
+                        )
+                    })?
                     .lock_ok()
                     .abort_axes(&axes)?,
             );
@@ -439,17 +448,19 @@ impl SpanSink for WireSink {
             mcu_id,
             axis: first,
         };
-        if self.drives_pulse_lane(key) {
+        if self.transports.is_pulse(key) {
             return self
-                .stepcompress_of(mcu_id)
-                .expect("a pulse lane named its own endpoint")
+                .stepcompress
+                .get(&mcu_id)
+                .ok_or_else(|| self.no_transport(key, "send_mcu_frames"))?
                 .lock_ok()
                 .send_frames(mcu_id, frames);
         }
-        if self.drives_sample_lane(key) {
+        if self.transports.is_phase(key) {
             return self
-                .samples_of(mcu_id)
-                .expect("a phase lane named its own endpoint")
+                .samples
+                .get(&mcu_id)
+                .ok_or_else(|| self.no_transport(key, "send_mcu_frames"))?
                 .lock_ok()
                 .send_frames(mcu_id, frames);
         }
@@ -462,12 +473,14 @@ impl SpanSink for WireSink {
         }
         if group == LANE_GROUP_PHASE {
             return self
-                .samples_of(mcu_id)
+                .samples
+                .get(&mcu_id)
                 .expect("accepted phase endpoint exists")
                 .lock_ok()
                 .tick();
         }
-        self.stepcompress_of(mcu_id)
+        self.stepcompress
+            .get(&mcu_id)
             .expect("accepted pulse endpoint exists")
             .lock_ok()
             .tick()

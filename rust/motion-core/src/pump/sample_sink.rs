@@ -82,7 +82,7 @@ fn host_io_sample_position_query(
         let params = io
             .call_args(
                 runtime_contract::sample_wire::SAMPLE_GET_POSITION_NAME,
-                &[("oid".to_string(), ArgValue::Int(i64::from(oid)))],
+                &[("oid", ArgValue::Int(i64::from(oid)))],
                 runtime_contract::sample_wire::SAMPLE_POSITION_NAME,
                 SAMPLE_POSITION_QUERY_TIMEOUT,
             )
@@ -174,16 +174,15 @@ pub fn build_sample_endpoint(
             cfg.mcu_id
         ));
     }
-    let mut endpoint = SampleEndpoint::new(
+    SampleEndpoint::new(
         cfg.mcu_id,
         &lanes,
         super::stepcompress_sink::host_io_egress(cfg.mcu_id, host_io.clone()),
         clock_of,
         pump_control,
+        host_io_sample_position_query(cfg.mcu_id, host_io),
     )
-    .map_err(|e| format!("sample mcu {}: {e}", cfg.mcu_id))?;
-    endpoint.set_position_query(host_io_sample_position_query(cfg.mcu_id, host_io));
-    Ok(endpoint)
+    .map_err(|e| format!("sample mcu {}: {e}", cfg.mcu_id))
 }
 
 /// One motor's sample lane. The position quantum is the fixed point the lane
@@ -905,7 +904,7 @@ pub struct SampleEndpoint {
     egress: FrameEgress,
     clock_of: ClockSource,
     pump_control: Sender<PumpMsg>,
-    position_query: Option<SamplePositionQuery>,
+    position_query: SamplePositionQuery,
     barriers: BarrierLedger,
     backlog: VecDeque<OutboundRun>,
     next_outbound_order: u64,
@@ -921,6 +920,7 @@ impl SampleEndpoint {
         egress: FrameEgress,
         clock_of: ClockSource,
         pump_control: Sender<PumpMsg>,
+        position_query: SamplePositionQuery,
     ) -> Result<Self, SendError> {
         let mut by_axis = HashMap::new();
         let mut built = Vec::with_capacity(lanes.len());
@@ -940,7 +940,7 @@ impl SampleEndpoint {
             egress,
             clock_of,
             pump_control,
-            position_query: None,
+            position_query,
             barriers: BarrierLedger::new(),
             backlog: VecDeque::new(),
             next_outbound_order: 0,
@@ -948,10 +948,6 @@ impl SampleEndpoint {
             fatal: None,
             buzz: None,
         })
-    }
-
-    pub fn set_position_query(&mut self, query: SamplePositionQuery) {
-        self.position_query = Some(query);
     }
 
     pub fn is_fatal(&self) -> bool {
@@ -991,9 +987,6 @@ impl SampleEndpoint {
         self.backlog.len()
     }
 
-    /// Whether this endpoint owns `axis` as one of its phase lanes. The pump
-    /// routes by this, so a lane's transport is a membership fact rather than
-    /// a configured mode.
     pub fn drives_axis(&self, axis: u8) -> bool {
         self.by_axis.contains_key(&axis)
     }
@@ -1030,20 +1023,6 @@ impl SampleEndpoint {
                 "sample endpoint mcu {}: no lane configured for axis {axis}",
                 self.mcu_id
             ))
-        })
-    }
-
-    fn lane_mut(&mut self, index: usize) -> Result<&mut SampleLane, SendError> {
-        let mcu_id = self.mcu_id;
-        self.lanes.get_mut(index).ok_or_else(|| {
-            SendError::Fatal(format!("sample endpoint mcu {mcu_id}: no lane {index}"))
-        })
-    }
-
-    fn lane_ref(&self, index: usize) -> Result<&SampleLane, SendError> {
-        let mcu_id = self.mcu_id;
-        self.lanes.get(index).ok_or_else(|| {
-            SendError::Fatal(format!("sample endpoint mcu {mcu_id}: no lane {index}"))
         })
     }
 
@@ -1091,7 +1070,7 @@ impl SampleEndpoint {
         }
         let (now, _) = self.clock_now()?;
         for (index, &position) in positions.iter().enumerate() {
-            let lane = self.lane_mut(index)?;
+            let lane = &mut self.lanes[index];
             lane.abandon_views();
             lane.seams.clear();
             lane.cut = None;
@@ -1125,7 +1104,7 @@ impl SampleEndpoint {
     /// precondition for arming a sweep on it, and the same one for calling the
     /// sweep played out.
     fn lane_idle_for_buzz(&self, index: usize) -> Result<bool, SendError> {
-        let lane = self.lane_ref(index)?;
+        let lane = &self.lanes[index];
         Ok(lane.cut.is_none()
             && lane.views.is_empty()
             && lane.active.is_none()
@@ -1213,7 +1192,7 @@ impl SampleEndpoint {
             });
         }
         for &index in &indexes {
-            self.lane_mut(index)?
+            self.lanes[index]
                 .seams
                 .push_back(PendingSeam::Gap { at: anchor_clock });
         }
@@ -1281,7 +1260,7 @@ impl SampleEndpoint {
             if !self.lane_idle_for_buzz(index)? {
                 return Ok(false);
             }
-            let axis = self.lane_ref(index)?.cfg.axis;
+            let axis = self.lanes[index].cfg.axis;
             if self.mcu_retired.playback_clock_of_axis(axis)? < buzz.end_clock {
                 return Ok(false);
             }
@@ -1314,7 +1293,7 @@ impl SampleEndpoint {
             }
         };
         for &index in &buzz.lanes {
-            let lane = self.lane_mut(index)?;
+            let lane = &mut self.lanes[index];
             let position = lane.position;
             lane.reset_to(position, now);
         }
@@ -1332,18 +1311,12 @@ impl SampleEndpoint {
     /// truth and the readback would report the origin before it.
     pub fn executed_position(&self, axis: u8) -> Result<i64, SendError> {
         let index = self.lane_of(axis)?;
-        let lane = self.lane_ref(index)?;
+        let lane = &self.lanes[index];
         if lane.wire_next_clock.is_none() {
             return Ok(lane.position);
         }
         let oid = lane.cfg.oid;
-        let query = self.position_query.as_ref().ok_or_else(|| {
-            SendError::Fatal(format!(
-                "sample endpoint mcu {} axis {axis}: no sample_get_position readback",
-                self.mcu_id
-            ))
-        })?;
-        let (executed_clock, executed) = query(oid).map_err(|error| {
+        let (executed_clock, executed) = (self.position_query)(oid).map_err(|error| {
             SendError::Fatal(format!(
                 "sample endpoint mcu {} axis {axis} oid {oid}: sample_get_position failed: \
                  {error}",
@@ -1370,7 +1343,7 @@ impl SampleEndpoint {
         let index = self.lane_of(axis)?;
         let (now, _) = self.clock_now()?;
         self.backlog.retain(|out| out.lane != index);
-        let lane = self.lane_mut(index)?;
+        let lane = &mut self.lanes[index];
         lane.abandon_views();
         lane.seams.clear();
         lane.cut = None;
@@ -1385,13 +1358,7 @@ impl SampleEndpoint {
             let index = self.lane_of(axis)?;
             let lane = &mut self.lanes[index];
             lane.absorb_mcu_reports(&self.mcu_retired)?;
-            let query = self.position_query.as_ref().ok_or_else(|| {
-                SendError::Fatal(format!(
-                    "sample endpoint mcu {} axis {axis}: halt needs position readback",
-                    self.mcu_id
-                ))
-            })?;
-            let (_, position) = query(lane.cfg.oid).map_err(|error| {
+            let (_, position) = (self.position_query)(lane.cfg.oid).map_err(|error| {
                 SendError::Fatal(format!(
                     "sample endpoint mcu {} axis {axis}: halt readback failed: {error}",
                     self.mcu_id
@@ -1441,7 +1408,7 @@ impl SampleEndpoint {
         epoch_freq: Option<f64>,
     ) -> Result<(), SendError> {
         let index = self.lane_of(axis)?;
-        self.lane_mut(index)?.seams.push_back(PendingSeam::Cut {
+        self.lanes[index].seams.push_back(PendingSeam::Cut {
             at: at_start_clock,
             epoch_freq,
         });
@@ -1450,7 +1417,7 @@ impl SampleEndpoint {
 
     pub fn mark_seam_gap(&mut self, axis: u8, at_start_clock: u64) -> Result<(), SendError> {
         let index = self.lane_of(axis)?;
-        self.lane_mut(index)?
+        self.lanes[index]
             .seams
             .push_back(PendingSeam::Gap { at: at_start_clock });
         Ok(())
@@ -1462,20 +1429,12 @@ impl SampleEndpoint {
             .map_err(|e| self.escalate(e))
     }
 
-    fn next_seam(
-        &self,
-        index: usize,
-        rest: &[ClockedMotorSpan],
-    ) -> Result<Option<(PendingSeam, usize)>, SendError> {
-        let lane = self.lane_ref(index)?;
-        let Some(seam) = lane.seams.front().copied() else {
-            return Ok(None);
-        };
+    fn next_seam(&self, index: usize, rest: &[ClockedMotorSpan]) -> Option<(PendingSeam, usize)> {
+        let seam = self.lanes[index].seams.front().copied()?;
         let at = seam.at();
-        Ok(rest
-            .iter()
+        rest.iter()
             .position(|view| view.start_clock >= at || view.end_clock > at)
-            .map(|split| (seam, split)))
+            .map(|split| (seam, split))
     }
 
     fn send_frames_inner(&mut self, mcu_id: u32, frames: &[AxisFrame]) -> Result<(), SendError> {
@@ -1488,7 +1447,7 @@ impl SampleEndpoint {
         let (now, freq) = self.clock_now()?;
         for frame in frames {
             let index = self.lane_of(frame.axis)?;
-            let lane = self.lane_ref(index)?;
+            let lane = &self.lanes[index];
             let incoming: usize = frames
                 .iter()
                 .filter(|other| other.axis == frame.axis)
@@ -1520,24 +1479,24 @@ impl SampleEndpoint {
                     }
                 }
             }
-            if self.lane_ref(index)?.cut.is_some() {
+            if self.lanes[index].cut.is_some() {
                 let views = frame.spans.clone();
-                if let Some(cut) = self.lane_mut(index)?.cut.as_mut() {
+                if let Some(cut) = self.lanes[index].cut.as_mut() {
                     cut.held.extend(views);
                 }
                 continue;
             }
             let mut rest: &[ClockedMotorSpan] = &frame.spans;
             loop {
-                let Some((seam, split)) = self.next_seam(index, rest)? else {
+                let Some((seam, split)) = self.next_seam(index, rest) else {
                     let tail = rest.to_vec();
-                    self.lane_mut(index)?.views.extend(tail);
+                    self.lanes[index].views.extend(tail);
                     break;
                 };
                 let (head, tail) = rest.split_at(split);
                 {
                     let head = head.to_vec();
-                    let lane = self.lane_mut(index)?;
+                    let lane = &mut self.lanes[index];
                     lane.views.extend(head);
                     lane.seams.pop_front();
                 }
@@ -1561,7 +1520,7 @@ impl SampleEndpoint {
     ) -> Result<bool, SendError> {
         self.sample_lane_until(index, seam.at())?;
         let mut closed = Vec::new();
-        self.lane_mut(index)?.close_run(&mut closed)?;
+        self.lanes[index].close_run(&mut closed)?;
         self.emit_closed(index, closed)?;
         match seam {
             PendingSeam::Gap { at } => {
@@ -1573,7 +1532,7 @@ impl SampleEndpoint {
                     at,
                     "[rejoin] forward seam gap sanctioned — the lane re-anchors"
                 );
-                let lane = self.lane_mut(index)?;
+                let lane = &mut self.lanes[index];
                 lane.prev_sample = at;
                 lane.origin_clock = Some(at);
                 lane.resume_floor = at;
@@ -1589,10 +1548,10 @@ impl SampleEndpoint {
                     ))
                 })?;
                 self.drain_into_backlog(now, freq)?;
-                let unretired = self.lane_ref(index)?.outstanding_runs(&self.mcu_retired)?;
+                let unretired = self.lanes[index].outstanding_runs(&self.mcu_retired)?;
                 if unretired == 0 {
                     self.backlog.retain(|out| out.lane != index);
-                    let lane = self.lane_mut(index)?;
+                    let lane = &mut self.lanes[index];
                     lane.abandon_views();
                     lane.cfg.cycles_per_second = epoch_freq;
                     lane.sample_period_cycles = lane.cfg.sample_period_cycles()?;
@@ -1600,17 +1559,17 @@ impl SampleEndpoint {
                     lane.reset_to(position, at);
                     return Ok(false);
                 }
-                if self.lane_ref(index)?.cut.is_some() {
+                if self.lanes[index].cut.is_some() {
                     return Err(SendError::Fatal(format!(
                         "sample endpoint mcu {} lane {index}: a reanchor cut is already awaiting \
                          mcu reconciliation at clock {at}",
                         self.mcu_id
                     )));
                 }
-                let oid = self.lane_ref(index)?.cfg.oid;
-                let expected_position = self.lane_ref(index)?.position;
+                let oid = self.lanes[index].cfg.oid;
+                let expected_position = self.lanes[index].position;
                 let barrier = self.barriers.issue(oid);
-                let lane = self.lane_mut(index)?;
+                let lane = &mut self.lanes[index];
                 lane.abandon_views();
                 lane.cut = Some(PendingSampleCut {
                     barrier,
@@ -1627,13 +1586,13 @@ impl SampleEndpoint {
 
     fn sample_lane_until(&mut self, index: usize, sample_to: u64) -> Result<(), SendError> {
         let mut closed = Vec::new();
-        self.lane_mut(index)?.sample_until(sample_to, &mut closed)?;
+        self.lanes[index].sample_until(sample_to, &mut closed)?;
         self.emit_closed(index, closed)
     }
 
     fn emit_closed(&mut self, index: usize, closed: Vec<ClosedRun>) -> Result<(), SendError> {
         for run in closed {
-            let oid = self.lane_ref(index)?.cfg.oid;
+            let oid = self.lanes[index].cfg.oid;
             let count = u8::try_from(run.positions.len()).map_err(|_| {
                 SendError::Fatal(format!(
                     "sample endpoint mcu {}: a run of {} samples exceeds the wire count field",
@@ -1691,9 +1650,9 @@ impl SampleEndpoint {
         let sample_to = now.saturating_add(lead);
         for index in 0..self.lanes.len() {
             self.sample_lane_until(index, sample_to)?;
-            if self.lane_needs_its_open_run(index, now)? {
+            if self.lane_needs_its_open_run(index, now) {
                 let mut closed = Vec::new();
-                self.lane_mut(index)?.close_run(&mut closed)?;
+                self.lanes[index].close_run(&mut closed)?;
                 self.emit_closed(index, closed)?;
             }
         }
@@ -1712,15 +1671,12 @@ impl SampleEndpoint {
     /// is one the mcu's shallow ring does not spend a slot on. It closes once
     /// its own window comes within the lane's send horizon, which is also how
     /// the last run of a move leaves.
-    fn lane_needs_its_open_run(&self, index: usize, now: u64) -> Result<bool, SendError> {
-        let lane = self.lane_ref(index)?;
-        if lane.cut.is_some() {
-            return Ok(false);
-        }
-        let Some(start) = lane.open_run_start() else {
-            return Ok(false);
-        };
-        Ok(start <= now.saturating_add(lane.send_horizon_cycles()))
+    fn lane_needs_its_open_run(&self, index: usize, now: u64) -> bool {
+        let lane = &self.lanes[index];
+        lane.cut.is_none()
+            && lane
+                .open_run_start()
+                .is_some_and(|start| start <= now.saturating_add(lane.send_horizon_cycles()))
     }
 
     fn flush(&mut self, now: u64, freq: f64) -> Result<(), SendError> {
@@ -1749,9 +1705,7 @@ impl SampleEndpoint {
         let mut stale: Option<SendError> = None;
         for (position, out) in self.backlog.iter().enumerate() {
             let lane_index = out.lane;
-            let parked_lane = parked
-                .get_mut(lane_index)
-                .ok_or_else(|| self.no_lane(lane_index))?;
+            let parked_lane = &mut parked[lane_index];
             if *parked_lane {
                 continue;
             }
@@ -1761,13 +1715,8 @@ impl SampleEndpoint {
                 stale = Some(self.stale_fatal(out, now, freq, guard_secs));
                 break;
             }
-            let lane_room = room
-                .get_mut(lane_index)
-                .ok_or_else(|| self.no_lane(lane_index))?;
-            let lane_horizon = horizon
-                .get(lane_index)
-                .copied()
-                .ok_or_else(|| self.no_lane(lane_index))?;
+            let lane_room = &mut room[lane_index];
+            let lane_horizon = horizon[lane_index];
             if out.start_clock > lane_horizon || (out.frame.needs_ring_room() && *lane_room == 0) {
                 *parked_lane = true;
                 continue;
@@ -1791,7 +1740,7 @@ impl SampleEndpoint {
                 keep
             });
             for (lane_index, end_clock) in sent_runs {
-                let lane = self.lane_mut(lane_index)?;
+                let lane = &mut self.lanes[lane_index];
                 lane.runs_sent = lane.runs_sent.wrapping_add(1);
                 lane.in_flight_end_clocks.push_back(end_clock);
             }
@@ -1842,7 +1791,7 @@ impl SampleEndpoint {
         let Some((index, saturated_for, queued)) = wedged else {
             return Ok(());
         };
-        let lane = self.lane_ref(index)?;
+        let lane = &self.lanes[index];
         let credit = self.mcu_retired.of_axis(lane.cfg.axis)?;
         let playback_clock = self.mcu_retired.playback_clock_of_axis(lane.cfg.axis)?;
         let heartbeat_age_ms = 1e3 * now.saturating_sub(playback_clock) as f64 / freq;
@@ -1874,19 +1823,10 @@ impl SampleEndpoint {
         Ok(())
     }
 
-    fn no_lane(&self, index: usize) -> SendError {
-        SendError::Fatal(format!(
-            "sample endpoint mcu {}: no lane {index}",
-            self.mcu_id
-        ))
-    }
-
     fn stale_fatal(&self, out: &OutboundRun, now: u64, freq: f64, guard_secs: f64) -> SendError {
         #[allow(clippy::cast_precision_loss)]
         let late_us = (now - out.start_clock) as f64 * 1e6 / freq;
-        let outstanding = self
-            .lane_ref(out.lane)
-            .and_then(|lane| lane.outstanding_runs(&self.mcu_retired));
+        let outstanding = self.lanes[out.lane].outstanding_runs(&self.mcu_retired);
         SendError::Fatal(format!(
             "sample endpoint mcu {}: {} at clock {} is {late_us:.0} us behind the projected \
              mcu clock {now}, past the {guard_secs} s floor margin. {SEND_LEAD_SECONDS} s of \
@@ -1961,25 +1901,19 @@ impl SampleEndpoint {
 
     fn complete_cut(&mut self, index: usize) -> Result<(), SendError> {
         let mcu_id = self.mcu_id;
-        let cut = self.lane_mut(index)?.cut.take().ok_or_else(|| {
+        let cut = self.lanes[index].cut.take().ok_or_else(|| {
             SendError::Fatal(format!(
                 "sample endpoint mcu {mcu_id}: cut completion on lane {index} has no pending cut"
             ))
         })?;
-        let query = self.position_query.as_ref().ok_or_else(|| {
-            SendError::Fatal(format!(
-                "sample endpoint mcu {mcu_id}: the sent-run cut at {} has no \
-                 sample_get_position readback",
-                cut.cut_at
-            ))
-        })?;
-        let (executed_clock, executed_position) = query(cut.barrier.oid).map_err(|error| {
-            SendError::Fatal(format!(
-                "sample endpoint mcu {mcu_id}: sample_get_position readback failed after \
+        let (executed_clock, executed_position) =
+            (self.position_query)(cut.barrier.oid).map_err(|error| {
+                SendError::Fatal(format!(
+                    "sample endpoint mcu {mcu_id}: sample_get_position readback failed after \
                  barrier oid={} seq={}: {error}",
-                cut.barrier.oid, cut.barrier.seq
-            ))
-        })?;
+                    cut.barrier.oid, cut.barrier.seq
+                ))
+            })?;
         if i64::from(executed_position) != cut.expected_position {
             return Err(SendError::Fatal(format!(
                 "sample endpoint mcu {mcu_id} lane {index} oid {} reanchor position mismatch \
@@ -1992,7 +1926,7 @@ impl SampleEndpoint {
             )));
         }
         self.backlog.retain(|out| out.lane != index);
-        let lane = self.lane_mut(index)?;
+        let lane = &mut self.lanes[index];
         lane.cfg.cycles_per_second = cut.epoch_freq;
         lane.sample_period_cycles = lane.cfg.sample_period_cycles()?;
         lane.reset_to(i64::from(executed_position), cut.cut_at);

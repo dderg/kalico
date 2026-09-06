@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::io;
-use std::time::Duration;
 
 #[derive(Debug)]
 pub enum TransportError {
@@ -66,29 +65,6 @@ impl std::fmt::Display for SubscribeError {
 }
 
 impl std::error::Error for SubscribeError {}
-
-pub trait Transport: Send + Sync {
-    fn call(
-        &self,
-        cmd: &str,
-        expected_response_name: &str,
-        timeout: Duration,
-    ) -> Result<MessageParams, TransportError>;
-
-    fn call_typed(
-        &self,
-        name: &str,
-        args: &[(&str, crate::host_io::parser::FieldValue<'_>)],
-        expected_response_name: &str,
-        timeout: Duration,
-    ) -> Result<MessageParams, TransportError>;
-
-    fn send_typed(
-        &self,
-        name: &str,
-        args: &[(&str, crate::host_io::parser::FieldValue<'_>)],
-    ) -> Result<(), TransportError>;
-}
 
 #[derive(Debug, Default, Clone)]
 pub struct MessageParams {

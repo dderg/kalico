@@ -12,8 +12,8 @@ use trajectory::{
     ContinuousAxis, ContinuousSegment, MotorGroup, MotorSpan, MotorTerm, NudgeProfile,
 };
 
-use super::CommittedFrontier;
 use super::dispatch::{DispatchError, SegmentSink};
+use super::{CommittedFrontier, PumpLink};
 
 /// State a committed `ContinuousSegment` needs to reach the pump: per-MCU
 /// clock anchoring/projection, the axis-lane split, and the motion-history
@@ -24,21 +24,21 @@ pub(crate) struct PumpSink {
     pub(crate) anchor: Arc<Mutex<crate::anchor::Anchor>>,
     pub(crate) mcu_configs: Vec<crate::mcu_config::McuAxisConfig>,
     pub(crate) pump_tx: Sender<crate::pump::EnqueueMsg>,
-    pub(crate) pump_control: Option<Sender<crate::pump::PumpMsg>>,
+    pub(crate) pump: Option<PumpLink>,
     pub(crate) counter: Arc<AtomicU64>,
     pub(crate) drip_active: Arc<AtomicBool>,
     pub(crate) motion_history: Arc<Mutex<crate::motion_history::HistoryStore>>,
     pub(crate) frontier: Arc<CommittedFrontier>,
     pub(crate) frozen_projection: Mutex<std::collections::HashMap<u32, FrozenProjection>>,
-    /// Set by the pump's fatal-transport action before the pump thread exits,
-    /// so a closed enqueue channel is reported as the endpoint fatal it is
-    /// rather than as a vanished thread.
-    pub(crate) transport_fatal: Arc<Mutex<Option<String>>>,
 }
 
 impl PumpSink {
     fn pump_gone(&self) -> DispatchError {
-        match self.transport_fatal.lock_ok().clone() {
+        match self
+            .pump
+            .as_ref()
+            .and_then(|pump| pump.transport_fatal.lock_ok().clone())
+        {
             Some(reason) => DispatchError::TransportFatal(reason),
             None => DispatchError::PumpGone,
         }
@@ -340,7 +340,7 @@ impl PumpSink {
         nudged_axis: u8,
         seam_host: f64,
     ) -> Result<(), DispatchError> {
-        let Some(control) = &self.pump_control else {
+        let Some(pump) = &self.pump else {
             return Ok(());
         };
         let at_start_clock = self.project(mcu_id, seam_host);
@@ -355,7 +355,7 @@ impl PumpSink {
                 if axis == nudged_axis {
                     continue;
                 }
-                control
+                pump.control
                     .send(crate::pump::PumpMsg::MarkReanchor {
                         key: crate::types::AxisKey { mcu_id, axis },
                         at_start_clock,

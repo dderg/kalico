@@ -7,11 +7,6 @@ publish = false
 description = "Standalone Rust host runtime for kalico — owns USB-CDC fd, drives MCU comms protocol, runs clock-freq estimator and credit-based flow control."
 license.workspace = true
 
-# Plan-decision C (Round-3-corrected): Step 6 ships a minimal `host_io.rs` shim
-# (connect/identify/send/recv-with-timeout) implementing the `Transport` trait.
-# Production-grade hardening (NAK retransmit, async event dispatch thread,
-# reconnect race recovery) is Step 7 MVP work.
-
 [dependencies]
 serialport = "4"
 libc = "0.2"

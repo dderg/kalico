@@ -97,7 +97,7 @@ fn host_io_step_count_query(mcu_id: u32, host_io: Weak<McuHostIo>) -> StepCountQ
         let params = io
             .call_args(
                 "stepper_get_position",
-                &[("oid".to_string(), ArgValue::Int(i64::from(oid)))],
+                &[("oid", ArgValue::Int(i64::from(oid)))],
                 "stepper_position",
                 STEP_COUNT_QUERY_TIMEOUT,
             )
@@ -251,10 +251,6 @@ pub fn build_endpoint(
         endpoint.set_drain_pass_budget(DRAIN_PASS_BUDGET);
     }
     Ok(endpoint)
-}
-
-struct InFlight {
-    reclaim_clock: u64,
 }
 
 struct PendingRetire {
@@ -507,7 +503,7 @@ pub struct StepcompressEndpoint {
     budget: u32,
     backlog: VecDeque<OutboundFrame>,
     next_outbound_order: u64,
-    in_flight: Vec<InFlight>,
+    in_flight: Vec<u64>,
     step_count_query: StepCountQuery,
     last_wire_probe_clock: u64,
     pending_retire: Option<PendingRetire>,
@@ -878,9 +874,6 @@ impl StepcompressEndpoint {
         self.shim.queue_depth()
     }
 
-    /// Whether this endpoint owns `axis` as one of its pulse lanes. The pump
-    /// routes by this, so a lane's transport is a membership fact rather than
-    /// a configured mode.
     pub fn drives_axis(&self, axis: u8) -> bool {
         self.axis_runs
             .iter()
@@ -1667,7 +1660,8 @@ impl StepcompressEndpoint {
         let cutoff = clock
             .now
             .saturating_sub(clock.ticks(CONSUMED_MARGIN_SECONDS));
-        self.in_flight.retain(|e| e.reclaim_clock > cutoff);
+        self.in_flight
+            .retain(|&reclaim_clock| reclaim_clock > cutoff);
         self.order_backlog_by_deadline();
         let guard_secs = pump_past_guard_secs();
         let stale_by = clock.ticks(guard_secs);
@@ -1789,11 +1783,7 @@ impl StepcompressEndpoint {
                 index += 1;
                 keep
             });
-            self.in_flight.extend(
-                reclaim_clocks
-                    .into_iter()
-                    .map(|reclaim_clock| InFlight { reclaim_clock }),
-            );
+            self.in_flight.extend(reclaim_clocks);
             for (lane, end_clock) in sent_boundaries {
                 self.lanes[lane].last_sent_boundary = Some(end_clock);
             }

@@ -9,15 +9,10 @@ use trajectory::AxisChainSet;
 
 use motion_pipeline::{StreamConfig, setup_stages};
 
-use crate::types::AxisKey;
-
 mod dispatch;
 mod ingress;
 mod pump_sink;
 mod stage_cpu;
-
-#[cfg(test)]
-pub(crate) use ingress::lead_secs;
 
 pub use dispatch::{DispatchError, SegmentSink};
 use dispatch::{Dispatcher, WorkerLinks};
@@ -61,8 +56,6 @@ pub struct HomeDripParams {
     pub direction: f64,
     pub speed_mm_s: f64,
     pub max_travel_mm: f64,
-    pub cohort: u64,
-    pub participants: Vec<AxisKey>,
 }
 
 #[derive(Debug)]
@@ -86,7 +79,7 @@ const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 pub enum StreamMsg {
     Move(geometry::Move),
     Flush {
-        notify: Sender<Option<Instant>>,
+        notify: Sender<()>,
     },
     /// Sequence point: resolves with the stream time at which everything
     /// submitted before it ends. `force` drains the pipeline (brake to rest)
@@ -100,11 +93,8 @@ pub enum StreamMsg {
         duration_s: f64,
         notify: Sender<()>,
     },
-    StreamOpen {
-        home_pos: Vec<f64>,
-    },
     Reset {
-        recovered_pos: Vec<f64>,
+        pos: Vec<f64>,
     },
     SetAxisChains(AxisChainSet),
     SetMesh {
@@ -197,6 +187,7 @@ pub struct MotionPipeline {
 /// pump stopped when it died on a latched endpoint fatal: a closed control
 /// channel is then a halt to ride out while klippy shuts down, not a stage
 /// death to abort on.
+#[derive(Clone)]
 pub struct PumpLink {
     pub control: Sender<crate::pump::PumpMsg>,
     pub transport_fatal: Arc<Mutex<Option<String>>>,
@@ -225,7 +216,6 @@ pub fn setup_pipeline(
     let mut callbacks = pump.callbacks;
     let latch_fatal = callbacks.on_fatal_transport;
     let transport_fatal_for_pump = Arc::clone(&transport_fatal);
-    let transport_fatal_for_ingress = Arc::clone(&transport_fatal);
     callbacks.on_fatal_transport = Box::new(move |key, reason| {
         transport_fatal_for_pump
             .lock_ok()
@@ -251,19 +241,22 @@ pub fn setup_pipeline(
         .expect("spawn push-pieces-pump thread");
     let frontier: Arc<CommittedFrontier> = Arc::default();
     stage_cpu::spawn_sampler(Arc::downgrade(&frontier));
+    let pump_link = PumpLink {
+        control: pump_control.clone(),
+        transport_fatal,
+    };
     let sink = PumpSink {
         transports: dispatch.transports,
         router: dispatch.router,
         anchor: dispatch.anchor,
         mcu_configs: dispatch.mcu_configs,
         pump_tx: pump_data,
-        pump_control: Some(pump_control.clone()),
+        pump: Some(pump_link.clone()),
         counter: dispatch.counter,
         drip_active: dispatch.drip_active,
         motion_history: dispatch.motion_history,
         frontier: Arc::clone(&frontier),
         frozen_projection: Mutex::new(std::collections::HashMap::new()),
-        transport_fatal,
     };
     let worker = StreamWorkerHandle::spawn(
         config,
@@ -271,10 +264,7 @@ pub fn setup_pipeline(
         home_pos,
         sink,
         frontier,
-        Some(PumpLink {
-            control: pump_control.clone(),
-            transport_fatal: transport_fatal_for_ingress,
-        }),
+        Some(pump_link),
     );
     MotionPipeline {
         worker,
@@ -317,8 +307,8 @@ impl StreamWorkerHandle {
             input: pipeline.input,
             links: Arc::clone(&links),
             frontier,
-            intake: ingress::IntakeState::default(),
-            reserve: ingress::DrainReserve::new(),
+            undrained_since: None,
+            worst_drain_s: 0.0,
             last_line: 0,
             pump,
         };
@@ -366,22 +356,18 @@ impl StreamWorkerHandle {
     }
 
     pub fn flush(&self) -> Result<(), StreamWorkerError> {
-        let (tx, rx) = crossbeam_channel::bounded(1);
+        let (notify, done) = bounded(1);
         self.sender
-            .send(StreamMsg::Flush { notify: tx })
+            .send(StreamMsg::Flush { notify })
             .map_err(|_| StreamWorkerError::ChannelClosed)?;
-        rx.recv()
-            .map(|_committed_through| ())
-            .map_err(|_| StreamWorkerError::ChannelClosed)
+        done.recv().map_err(|_| StreamWorkerError::ChannelClosed)
     }
 
     /// Non-blocking: `ChannelFull` means the caller must retry after
     /// yielding, exactly like `fence_start` — a blocking send here wedges
     /// the klippy reactor for as long as the backpressured pipe takes to
     /// admit one message.
-    pub fn flush_try_start(
-        &self,
-    ) -> Result<crossbeam_channel::Receiver<Option<Instant>>, StreamWorkerError> {
+    pub fn flush_try_start(&self) -> Result<crossbeam_channel::Receiver<()>, StreamWorkerError> {
         let (tx, rx) = crossbeam_channel::bounded(1);
         self.try_send_arming(StreamMsg::Flush { notify: tx })?;
         Ok(rx)
@@ -415,15 +401,9 @@ impl StreamWorkerHandle {
         rx.recv().map_err(|_| StreamWorkerError::ChannelClosed)
     }
 
-    pub fn stream_open(&self, home_pos: Vec<f64>) -> Result<(), StreamWorkerError> {
+    pub fn reset(&self, pos: Vec<f64>) -> Result<(), StreamWorkerError> {
         self.sender
-            .send(StreamMsg::StreamOpen { home_pos })
-            .map_err(|_| StreamWorkerError::ChannelClosed)
-    }
-
-    pub fn reset(&self, recovered_pos: Vec<f64>) -> Result<(), StreamWorkerError> {
-        self.sender
-            .send(StreamMsg::Reset { recovered_pos })
+            .send(StreamMsg::Reset { pos })
             .map_err(|_| StreamWorkerError::ChannelClosed)
     }
 
@@ -494,11 +474,6 @@ impl StreamWorkerHandle {
     #[must_use]
     pub fn last_move_time(&self) -> f64 {
         f64::from_bits(self.links.last_move_time_bits.load(Ordering::Acquire))
-    }
-
-    #[must_use]
-    pub fn commit_fire_count(&self) -> u32 {
-        self.links.commit_fire_count.load(Ordering::Acquire)
     }
 
     pub fn shutdown(&mut self) {

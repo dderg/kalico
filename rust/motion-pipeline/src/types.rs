@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Instant;
 
 use crossbeam_channel::{Receiver, Sender};
 use geometry::{CornerFitConfig, Move, MoveVelocity, SurfaceTransform, VelocityLimits};
@@ -208,9 +207,6 @@ pub struct BarrierAck {
     /// Stream time the dispatched trajectory has reached; `None` when nothing
     /// has been dispatched since the last reset.
     pub dispatched_through: Option<f64>,
-    /// Host instant of the first dispatch since the last reset, for
-    /// projecting stream time onto the wall clock.
-    pub sync_instant: Option<Instant>,
     /// Dispatch errors captured since the previous barrier (error capture is
     /// enabled by the homing paths; otherwise a dispatch error is fatal).
     pub result: Result<(), String>,
@@ -239,23 +235,4 @@ pub enum TrajectoryItem {
     Seg(ContinuousSegment),
     Parked,
     Control(Control),
-}
-
-/// Jerk-limited time to decelerate from `v` to rest under accel limit `a` and
-/// jerk limit `j`: `v/a + a/j` once the ramp reaches `a` (`v > a²/j`), else the
-/// triangular `2·√(v/j)`. Curvature only slows a real stop, so this
-/// straight-line time is a safe over-estimate.
-#[must_use]
-pub fn jerk_limited_brake_time(v: f64, a: f64, j: f64) -> f64 {
-    if v <= 0.0 {
-        return 0.0;
-    }
-    if a <= 0.0 || j <= 0.0 {
-        return f64::INFINITY;
-    }
-    if v > a * a / j {
-        v / a + a / j
-    } else {
-        2.0 * (v / j).sqrt()
-    }
 }

@@ -81,7 +81,6 @@ impl PyMotionEngine {
         let msg_owned = msg.to_owned();
         let response_owned = response.to_owned();
         let params = py.detach(|| -> PyResult<_> {
-            use host_rt::transport::Transport;
             io.call(
                 &msg_owned,
                 &response_owned,

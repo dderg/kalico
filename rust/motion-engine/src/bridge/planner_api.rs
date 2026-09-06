@@ -1,5 +1,5 @@
 use super::{
-    Arc, DRAIN_TIMEOUT, FieldValue, HashSet, McuTopologyInput, Ordering, PyMotionEngine, PyResult,
+    Arc, ArgValue, DRAIN_TIMEOUT, HashSet, McuTopologyInput, Ordering, PyMotionEngine, PyResult,
     PyRuntimeError, PyValueError, Python, classify, planner_err, pymethods, require_positive,
 };
 use motion_core::lock_ext::LockExt;
@@ -554,12 +554,12 @@ impl PyMotionEngine {
                     s.mcu_id
                 )
             });
-            io.send_typed(
+            io.send_args(
                 "runtime_seed_position",
                 &[
-                    ("x_q16", FieldValue::I32(s.x_q16)),
-                    ("y_q16", FieldValue::I32(s.y_q16)),
-                    ("z_q16", FieldValue::I32(s.z_q16)),
+                    ("x_q16", ArgValue::Int(i64::from(s.x_q16))),
+                    ("y_q16", ArgValue::Int(i64::from(s.y_q16))),
+                    ("z_q16", ArgValue::Int(i64::from(s.z_q16))),
                 ],
             )
             .map_err(|e| {
@@ -680,7 +680,7 @@ impl PyMotionEngine {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("planner disappeared during position reseed"))?;
         planner
-            .stream_open(motion_core::mcu_config::reanchor_stream_pos(gcode))
+            .reset(motion_core::mcu_config::reanchor_stream_pos(gcode))
             .map_err(planner_err)?;
         self.send_serial_position_seeds(machine)?;
         Ok(())

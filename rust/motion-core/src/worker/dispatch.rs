@@ -5,8 +5,7 @@
 //! because dispatch is where the stream leaves the pure-stage world.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crossbeam_channel::Receiver;
 use trajectory::{ContinuousSegment, NudgeProfile};
@@ -17,26 +16,6 @@ use super::{CommittedFrontier, fatal};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DispatchError {
-    #[error(
-        "motion-engine: curve for mcu {mcu_id} exceeds caps \
-         (pieces {pieces} > {max_pieces}); \
-         logical-move splitting not yet implemented (Task 13 follow-up)."
-    )]
-    CapsExceeded {
-        mcu_id: u32,
-        pieces: usize,
-        max_pieces: usize,
-    },
-    #[error("compute_ack_clock: {0}")]
-    ComputeAckClock(String),
-    #[error(
-        "compute_ack_clock returned 0 after 5s — \
-         clock-sync didn't establish for mcu {mcu_id} (mcu_h={mcu_handle:?})"
-    )]
-    ClockSyncTimeout {
-        mcu_id: u32,
-        mcu_handle: host_rt::passthrough_queue::McuHandle,
-    },
     #[error(
         "mcu {mcu_id} (mcu_h={mcu_handle:?}) has no converged clocksync record — \
          refusing to anchor a step stream on it. The record is invalidated by every \
@@ -60,8 +39,6 @@ pub enum DispatchError {
         age_secs: f64,
         max_age_secs: f64,
     },
-    #[error("MCU {0}: connection dropped during dispatch")]
-    ConnectionDropped(u32),
     #[error("piece pump thread is gone; cannot dispatch")]
     PumpGone,
     #[error("pump stopped on a fatal endpoint condition, latched for klippy: {0}")]
@@ -103,7 +80,6 @@ pub(crate) struct WorkerLinks {
     pub(crate) capture_errors: AtomicBool,
     pub(crate) shutting_down: AtomicBool,
     pub(crate) last_move_time_bits: AtomicU64,
-    pub(crate) commit_fire_count: AtomicU32,
     pub(crate) fences: crate::fence::FenceRegistry,
     pub(crate) wakeup: crate::feed_wakeup::FeedWakeup,
 }
@@ -117,9 +93,6 @@ pub(crate) struct Dispatcher<S> {
     sink: S,
     links: Arc<WorkerLinks>,
     frontier: Arc<CommittedFrontier>,
-    /// Host instant of the first dispatch since the last reset, for
-    /// projecting stream time onto the wall clock.
-    sync_instant: Option<Instant>,
     dispatched_through: Option<f64>,
     pending_error: Option<String>,
     /// The pump died on an endpoint fatal that klippy has been handed; every
@@ -133,7 +106,6 @@ impl<S: SegmentSink> Dispatcher<S> {
             sink,
             links,
             frontier,
-            sync_instant: None,
             dispatched_through: None,
             pending_error: None,
             transport_halted: false,
@@ -193,13 +165,9 @@ impl<S: SegmentSink> Dispatcher<S> {
     }
 
     fn publish_progress(&mut self, t_end: f64) {
-        if self.sync_instant.is_none() {
-            self.sync_instant = Some(Instant::now());
-        }
         self.links
             .last_move_time_bits
             .store(t_end.to_bits(), Ordering::Release);
-        self.links.commit_fire_count.fetch_add(1, Ordering::AcqRel);
     }
 
     fn handle_control(&mut self, ctrl: Control) {
@@ -207,7 +175,6 @@ impl<S: SegmentSink> Dispatcher<S> {
             Control::Barrier(tx) => {
                 let ack = BarrierAck {
                     dispatched_through: self.dispatched_through,
-                    sync_instant: self.sync_instant,
                     result: self.pending_error.take().map_or(Ok(()), Err),
                 };
                 let _ = tx.send(ack);
@@ -220,7 +187,6 @@ impl<S: SegmentSink> Dispatcher<S> {
                 self.links
                     .last_move_time_bits
                     .store(0.0_f64.to_bits(), Ordering::Release);
-                self.sync_instant = None;
             }
             Control::Dwell { secs } => {
                 if let Some(t) = &mut self.dispatched_through {

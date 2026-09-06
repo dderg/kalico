@@ -1438,8 +1438,15 @@ fn phase_endpoint(
         max_units_per_sample: 4_096,
         ring_depth: 64,
     }];
-    let endpoint = SampleEndpoint::new(BUZZ_MCU, &lanes, egress, clock_of, control.clone())
-        .expect("the lane config is representable");
+    let endpoint = SampleEndpoint::new(
+        BUZZ_MCU,
+        &lanes,
+        egress,
+        clock_of,
+        control.clone(),
+        Arc::new(|_| Ok((0, 0))),
+    )
+    .expect("the lane config is representable");
     Arc::new(Mutex::new(endpoint))
 }
 

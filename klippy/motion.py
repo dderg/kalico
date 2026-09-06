@@ -597,8 +597,7 @@ class Motion:
         self._drain_to_mcu_execution()
 
     def _drain_to_mcu_execution(self):
-        self.engine.wait_moves()
-        frontier = self.engine.frontier_print_time(self.mcu.get_engine_handle())
+        frontier = self._fence_wait_blocking()
         for mcu in self._engine_mcus():
 
             def _mcu_caught_up(mcu=mcu):

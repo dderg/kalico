@@ -1,11 +1,9 @@
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use geometry::path::lowering::PositionProfile;
 use geometry::path::{CurvatureProfile, Segment};
-use geometry::{BoundaryState, Move, VelocityProfile, plan_velocity_stops_select_prefix};
+use geometry::{Move, VelocityProfile, plan_velocity_stops_select_prefix};
 
-use crate::types::{
-    Control, PlannedItem, PlannedMove, StreamConfig, StreamInput, jerk_limited_brake_time,
-};
+use crate::types::{Control, PlannedItem, PlannedMove, StreamConfig, StreamInput};
 
 /// Cost governor, not a lookahead bound: velocity planning is ~linear in the
 /// window, so re-planning on every arriving move would be quadratic. The window
@@ -23,30 +21,9 @@ const REPLAN_BATCH_MOVES: usize = 64;
 /// decides whether planning keeps up with the print.
 const QUIET_PLAN_MIN_MOVES: usize = 32;
 
-/// Second pipeline stage: plans jerk-limited S-curve velocity over the
-/// incoming geometry and emits `PlannedMove`s whose velocity bodies are final
-/// under any future append.
-///
-/// The planner knows nothing about how the moves were produced: full stops
-/// are derived from the geometry itself — a seam where consecutive moves are
-/// not tangent-continuous (or where a move has no spatial body) anchors the
-/// velocity to rest, so a velocity discontinuity is impossible by
-/// construction.
-///
-/// The window of moves is re-planned warm-started from the profile state
-/// `(v, a)` already emitted at the last seam, so the next window continues
-/// the same jerk-limited curve — no velocity or acceleration discontinuity
-/// at the cut, and a seam crossed mid-brake stays re-plannable. A prefix is emitted up to the furthest-forward
-/// clean (zero-curvature) seam that is inside the plan's finality barrier and
-/// clear of the brake-to-rest setback — past that point a move's velocity
-/// body is still shaped by the window's tentative terminal rest, so it must
-/// wait. `Drain` (or the input closing) materializes the deferred
-/// brake-to-rest: the whole window is planned to rest and emitted. The
-/// planner itself never decides when to stop looking ahead — that call
-/// belongs to whoever sends `Drain`.
 pub struct Planner {
     moves: Vec<Move>,
-    entry: BoundaryState,
+    entry_v: f64,
     moves_since_plan: usize,
     config: StreamConfig,
 }
@@ -55,7 +32,7 @@ impl Planner {
     pub fn new(config: StreamConfig) -> Self {
         Self {
             moves: Vec::new(),
-            entry: BoundaryState::REST,
+            entry_v: 0.0,
             moves_since_plan: 0,
             config,
         }
@@ -122,7 +99,7 @@ impl Planner {
         match &ctrl {
             Control::Reset { .. } => {
                 self.moves.clear();
-                self.entry = BoundaryState::REST;
+                self.entry_v = 0.0;
                 self.moves_since_plan = 0;
             }
             Control::Dwell { .. }
@@ -186,7 +163,7 @@ impl Planner {
             self.config.integration_tol,
             self.config.max_extrude_only_velocity_mm_s,
             self.config.max_extrude_only_accel_mm_s2,
-            self.entry,
+            self.entry_v,
             select_prefix,
         )
         .unwrap_or_else(|e| panic!("planner: velocity plan failed: {e:?}"));
@@ -199,8 +176,7 @@ impl Planner {
             reconstructed = profile.moves.len(),
             barrier = profile.barrier,
             v_barrier = profile.v_barrier,
-            entry_v = self.entry.v,
-            entry_a = self.entry.a,
+            entry_v = self.entry_v,
             plan_us = clock.elapsed_us(),
             t_us = crate::timing::mono_us(),
             "[pipe] plan"
@@ -247,7 +223,7 @@ impl Planner {
     /// fictional rest has its body shaped by that fiction and an appended
     /// move would change it. That braking rides the *open tail* — the moves
     /// beyond the seam — so the tail's own peak feedrate and tightest
-    /// accel/jerk budget are what set its length. Reading them off the whole
+    /// acceleration budget are what set its length. Reading them off the whole
     /// window instead makes one already-passed travel move dictate the
     /// setback for every seam behind it, which on a print that interleaves
     /// 600 mm/s travels with 300 mm/s extrusions inflates the held-back tail
@@ -258,14 +234,19 @@ impl Planner {
         let mut arc = 0.0_f64;
         let mut v_peak = 0.0_f64;
         let mut accel = f64::INFINITY;
-        let mut jerk = f64::INFINITY;
         for i in (1..self.moves.len()).rev() {
             let m = &self.moves[i];
             arc += m.segment.s_len();
             v_peak = v_peak.max(m.feedrate_mm_s.min(m.limits.max_velocity_mm_s));
             accel = accel.min(m.limits.accel_mm_s2);
-            jerk = jerk.min(m.limits.max_jerk_mm_s3);
-            if arc >= v_peak * jerk_limited_brake_time(v_peak, accel, jerk) {
+            let brake_time = if v_peak <= 0.0 {
+                0.0
+            } else if accel <= 0.0 {
+                f64::INFINITY
+            } else {
+                v_peak / accel
+            };
+            if arc >= v_peak * brake_time {
                 return i;
             }
         }
@@ -279,7 +260,7 @@ impl Planner {
         output: &Sender<PlannedItem>,
     ) -> bool {
         debug_assert_eq!(profile.moves.len(), count);
-        self.entry = profile.boundaries[count];
+        self.entry_v = profile.boundary_speeds[count];
         for (geometry, velocity) in self.moves.drain(..count).zip(profile.moves.iter().cloned()) {
             if output
                 .send(PlannedItem::Move(PlannedMove { geometry, velocity }))
@@ -291,10 +272,6 @@ impl Planner {
         true
     }
 
-    /// A non-forced emission may cut wherever the path resumes a straight line
-    /// body (zero curvature) or comes to a full stop — never inside a curved
-    /// piece, where the warm-start's straight-line jerk anchor would misstate
-    /// the vector jerk state the curvature adds.
     fn is_clean_seam(&self, i: usize) -> bool {
         matches!(self.moves[i].segment.spatial, Some(Segment::Line(_))) || self.stop_at_seam(i)
     }

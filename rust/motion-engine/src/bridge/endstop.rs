@@ -57,7 +57,7 @@ impl TripDeps {
             .call_args(
                 "stepper_get_position",
                 &[(
-                    "oid".to_string(),
+                    "oid",
                     host_rt::host_io::parser::ArgValue::Int(i64::from(lane.oid)),
                 )],
                 "stepper_position",

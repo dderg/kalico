@@ -125,10 +125,10 @@ fn fresh_reactor_with_broken_write() -> (Reactor, std::sync::mpsc::Sender<Reacto
 }
 
 #[test]
-fn submit_typed_io_error_transitions_closed() {
+fn call_io_error_transitions_closed() {
     let (mut reactor, tx) = fresh_reactor_with_broken_write();
     let (completion_tx, completion_rx) = sync_channel(1);
-    tx.send(ReactorCommand::SubmitTyped {
+    tx.send(ReactorCommand::Call {
         call_id: 1,
         payload: vec![0xAA],
         expected_response_name: "noop".into(),
@@ -146,11 +146,7 @@ fn submit_typed_io_error_transitions_closed() {
         Err(TransportError::Io(e)) => assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe),
         other => panic!("expected Io(BrokenPipe), got {other:?}"),
     }
-    assert_eq!(
-        reactor.state,
-        ReactorState::Closed,
-        "Fix 1: SubmitTyped's Io error MUST transition Closed"
-    );
+    assert_eq!(reactor.state, ReactorState::Closed);
     let cell = reactor
         .event_dispatcher
         .fault_latch
@@ -168,9 +164,9 @@ fn submit_typed_io_error_transitions_closed() {
 }
 
 #[test]
-fn fire_and_forget_typed_io_error_transitions_closed() {
+fn fire_and_forget_io_error_transitions_closed() {
     let (mut reactor, tx) = fresh_reactor_with_broken_write();
-    tx.send(ReactorCommand::FireAndForgetTyped {
+    tx.send(ReactorCommand::FireAndForget {
         payload: vec![0x11, 0x22, 0x33],
     })
     .expect("submission_tx open");
@@ -180,7 +176,7 @@ fn fire_and_forget_typed_io_error_transitions_closed() {
     assert_eq!(
         reactor.state,
         ReactorState::Closed,
-        "Fix 1: FireAndForgetTyped's Io error MUST transition Closed"
+        "FireAndForget's Io error MUST transition Closed"
     );
     assert!(
         reactor.event_dispatcher.fault_latch.cell.is_some(),
@@ -235,7 +231,7 @@ fn one_io_fault_closes_transport_no_storm() {
     let mut completion_rxs = Vec::new();
     for i in 0..20u64 {
         let (ctx, crx) = sync_channel(1);
-        tx.send(ReactorCommand::SubmitTyped {
+        tx.send(ReactorCommand::Call {
             call_id: i,
             payload: vec![i as u8],
             expected_response_name: "noop".into(),
@@ -262,7 +258,7 @@ fn one_io_fault_closes_transport_no_storm() {
     }
     assert!(
         delivered_io >= 1,
-        "at least one Submit got an error response; got {delivered_io}"
+        "at least one Call got an error response; got {delivered_io}"
     );
 }
 
@@ -449,7 +445,7 @@ fn rto_retransmit_io_error_transitions_closed() {
     let (mut reactor, tx) = fresh_reactor_with_flaky_port(1);
 
     let (completion_tx, completion_rx) = sync_channel(1);
-    tx.send(ReactorCommand::SubmitTyped {
+    tx.send(ReactorCommand::Call {
         call_id: 1,
         payload: vec![0xAA],
         expected_response_name: "noop".into(),

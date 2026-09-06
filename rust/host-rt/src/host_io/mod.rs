@@ -34,7 +34,7 @@ use crate::host_io::parser::MsgProtoParser;
 use crate::host_io::runtime_events::{
     FaultEvent, McuLogEvent, RuntimeEvent, StatusEvent, TraceEvent,
 };
-use crate::transport::{MessageParams, SubscribeError, Transport, TransportError};
+use crate::transport::{MessageParams, SubscribeError, TransportError};
 
 const DEFAULT_BAUD: u32 = 250_000;
 
@@ -85,14 +85,7 @@ impl std::fmt::Debug for McuLogHook {
 
 #[derive(Debug)]
 pub enum ReactorCommand {
-    Submit {
-        call_id: u64,
-        cmd: String,
-        expected_response_name: String,
-        completion: SyncSender<Result<MessageParams, TransportError>>,
-        deadline: std::time::Instant,
-    },
-    SubmitTyped {
+    Call {
         call_id: u64,
         payload: Vec<u8>,
         expected_response_name: String,
@@ -120,9 +113,6 @@ pub enum ReactorCommand {
         reply: SyncSender<Result<(), SubscribeError>>,
     },
     FireAndForget {
-        cmd: String,
-    },
-    FireAndForgetTyped {
         payload: Vec<u8>,
     },
     /// A burst of encoded commands to pack into as few Klipper message
@@ -511,60 +501,32 @@ impl McuHostIo {
     }
 }
 
-impl Transport for McuHostIo {
-    fn call(
+impl McuHostIo {
+    pub fn call(
         &self,
         cmd: &str,
         expected_response_name: &str,
         timeout: Duration,
     ) -> Result<MessageParams, TransportError> {
-        let call_id = self.next_call_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let deadline = self.clock.now() + timeout;
-
-        self.submission_tx
-            .send(ReactorCommand::Submit {
-                call_id,
-                cmd: cmd.to_string(),
-                expected_response_name: expected_response_name.to_string(),
-                completion: tx,
-                deadline,
-            })
-            .map_err(|_| TransportError::Closed)?;
-
-        let handle = crate::host_io::call_handle::CallHandle {
-            call_id,
-            submission_tx: self.submission_tx.clone(),
-        };
-
-        match rx.recv_timeout(timeout) {
-            Ok(r) => {
-                handle.defuse();
-                r
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(TransportError::Timeout),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(TransportError::Closed),
-        }
+        let payload = self
+            .parser
+            .encode(cmd)
+            .map_err(|e| TransportError::Parse(format!("{e:?}")))?;
+        self.call_payload(payload, expected_response_name, timeout)
     }
 
-    fn call_typed(
+    fn call_payload(
         &self,
-        name: &str,
-        args: &[(&str, crate::host_io::parser::FieldValue<'_>)],
+        payload: Vec<u8>,
         expected_response_name: &str,
         timeout: Duration,
     ) -> Result<MessageParams, TransportError> {
-        let payload = self
-            .parser
-            .encode_typed(name, args)
-            .map_err(|e| TransportError::Parse(format!("{e:?}")))?;
-
         let call_id = self.next_call_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let deadline = self.clock.now() + timeout;
 
         self.submission_tx
-            .send(ReactorCommand::SubmitTyped {
+            .send(ReactorCommand::Call {
                 call_id,
                 payload,
                 expected_response_name: expected_response_name.to_string(),
@@ -588,16 +550,6 @@ impl Transport for McuHostIo {
         }
     }
 
-    fn send_typed(
-        &self,
-        name: &str,
-        args: &[(&str, crate::host_io::parser::FieldValue<'_>)],
-    ) -> Result<(), TransportError> {
-        McuHostIo::send_typed(self, name, args)
-    }
-}
-
-impl McuHostIo {
     pub fn is_alive(&self) -> bool {
         self.submission_tx.send(ReactorCommand::Noop).is_ok()
     }
@@ -738,10 +690,12 @@ impl McuHostIo {
     }
 
     pub fn send_fire_and_forget(&self, cmd: &str) -> Result<(), TransportError> {
+        let payload = self
+            .parser
+            .encode(cmd)
+            .map_err(|e| TransportError::Parse(format!("{e:?}")))?;
         self.submission_tx
-            .send(ReactorCommand::FireAndForget {
-                cmd: cmd.to_owned(),
-            })
+            .send(ReactorCommand::FireAndForget { payload })
             .map_err(|_| TransportError::Closed)
     }
 
@@ -764,31 +718,17 @@ impl McuHostIo {
             .map_err(|_| TransportError::Closed)
     }
 
-    pub fn send_typed(
+    pub fn send_args<K: AsRef<str>>(
         &self,
         name: &str,
-        args: &[(&str, crate::host_io::parser::FieldValue<'_>)],
-    ) -> Result<(), TransportError> {
-        let payload = self
-            .parser
-            .encode_typed(name, args)
-            .map_err(|e| TransportError::Parse(format!("{e:?}")))?;
-        self.submission_tx
-            .send(ReactorCommand::FireAndForgetTyped { payload })
-            .map_err(|_| TransportError::Closed)
-    }
-
-    pub fn send_args(
-        &self,
-        name: &str,
-        args: &[(String, crate::host_io::parser::ArgValue)],
+        args: &[(K, crate::host_io::parser::ArgValue)],
     ) -> Result<(), TransportError> {
         let payload = self
             .parser
             .encode_args(name, args)
             .map_err(|e| TransportError::Parse(format!("{name}: {e:?}")))?;
         self.submission_tx
-            .send(ReactorCommand::FireAndForgetTyped { payload })
+            .send(ReactorCommand::FireAndForget { payload })
             .map_err(|_| TransportError::Closed)
     }
 
@@ -834,10 +774,10 @@ impl McuHostIo {
             })
     }
 
-    pub fn call_args(
+    pub fn call_args<K: AsRef<str>>(
         &self,
         name: &str,
-        args: &[(String, crate::host_io::parser::ArgValue)],
+        args: &[(K, crate::host_io::parser::ArgValue)],
         expected_response_name: &str,
         timeout: Duration,
     ) -> Result<MessageParams, TransportError> {
@@ -845,34 +785,7 @@ impl McuHostIo {
             .parser
             .encode_args(name, args)
             .map_err(|e| TransportError::Parse(format!("{name}: {e:?}")))?;
-
-        let call_id = self.next_call_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let deadline = self.clock.now() + timeout;
-
-        self.submission_tx
-            .send(ReactorCommand::SubmitTyped {
-                call_id,
-                payload,
-                expected_response_name: expected_response_name.to_string(),
-                completion: tx,
-                deadline,
-            })
-            .map_err(|_| TransportError::Closed)?;
-
-        let handle = crate::host_io::call_handle::CallHandle {
-            call_id,
-            submission_tx: self.submission_tx.clone(),
-        };
-
-        match rx.recv_timeout(timeout) {
-            Ok(r) => {
-                handle.defuse();
-                r
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(TransportError::Timeout),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(TransportError::Closed),
-        }
+        self.call_payload(payload, expected_response_name, timeout)
     }
 
     pub fn kalico_identify(

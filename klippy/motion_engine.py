@@ -265,15 +265,6 @@ class MotionEngineWrapper:
     def engine_call(self, mcu_handle, msg, response, timeout_s=15.0):
         return self._engine.engine_call(mcu_handle, msg, response, timeout_s)
 
-    def wait_moves(self):
-        flush_id = self._engine.wait_moves_start()
-        engine_wait.wait_for(
-            self._printer,
-            lambda: self._engine.wait_moves_poll(flush_id) or None,
-            "wait_moves flush",
-            engine_wait.UNBOUNDED,
-        )
-
     def set_position(self, x, y, z):
         return self._wait_native_call(
             lambda: self._engine.set_position(x, y, z)

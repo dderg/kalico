@@ -171,8 +171,6 @@ impl PyMotionEngine {
                         direction,
                         speed_mm_s,
                         max_travel_mm,
-                        cohort,
-                        participants: all_axis_keys.clone(),
                     })
                     .map_err(planner_err)?
             };
@@ -539,12 +537,12 @@ impl PyMotionEngine {
         let Some(planner) = planner_guard.as_ref() else {
             return true;
         };
-        let open_result = planner.stream_open(motion_core::mcu_config::reanchor_stream_pos(gcode));
-        if let Err(e) = open_result {
+        let reset_result = planner.reset(motion_core::mcu_config::reanchor_stream_pos(gcode));
+        if let Err(e) = reset_result {
             tracing::error!(
-                event = "home_abort_stream_open_failed",
+                event = "home_abort_stream_reset_failed",
                 error = ?e,
-                "home_abort: runtime_stream_open failed after drain — \
+                "home_abort: stream reset failed after drain — \
                  commanded_pos is STALE; a firmware restart is required: {e:?}"
             );
             return false;

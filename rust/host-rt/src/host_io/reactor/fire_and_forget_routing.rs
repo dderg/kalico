@@ -2,12 +2,12 @@ use super::*;
 use crate::host_io::test_harness::ReactorHarness;
 
 #[test]
-fn fire_and_forget_typed_command_writes_payload_to_wire() {
+fn fire_and_forget_command_writes_payload_to_wire() {
     let mut h = ReactorHarness::new();
     let payload = vec![0x2A, 0x07, 0x11];
 
     h.submission_tx
-        .send(ReactorCommand::FireAndForgetTyped {
+        .send(ReactorCommand::FireAndForget {
             payload: payload.clone(),
         })
         .expect("submission_tx open");
