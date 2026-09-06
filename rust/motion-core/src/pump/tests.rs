@@ -119,28 +119,46 @@ fn make_enqueue(
 fn room_full_then_drains() {
     let mut q = AxisQueue::new(4);
     assert_eq!(q.room(), 4);
-    q.pushed = 4;
+    q.credit.accept(4);
     assert_eq!(q.room(), 0);
-    q.consumed = 1;
+    q.credit.observe(
+        RetiredBy::Pulse as usize,
+        execution_credit::Progress {
+            consumed: 1,
+            retired: 0,
+        },
+    );
     assert_eq!(q.room(), 1);
 }
 
 #[test]
 fn consumed_spans_reopen_capacity_before_execution_retires_them() {
     let mut q = AxisQueue::new(64);
-    q.pushed = 64;
-    q.consumed = 64;
-    q.retired = 0;
+    q.credit.accept(64);
+    q.credit.observe(
+        RetiredBy::Pulse as usize,
+        execution_credit::Progress {
+            consumed: 64,
+            retired: 0,
+        },
+    );
 
     assert_eq!(q.room(), 64);
-    assert_ne!(q.pushed, q.retired);
+    assert_ne!(q.credit.snapshot().pushed, q.credit.snapshot().retired);
 }
 
 #[test]
 fn room_correct_across_u32_wrap() {
     let mut q = AxisQueue::new(8);
-    q.pushed = 2;
-    q.consumed = u32::MAX;
+    q.credit.accept(u32::MAX);
+    q.credit.observe(
+        RetiredBy::Pulse as usize,
+        execution_credit::Progress {
+            consumed: u32::MAX,
+            retired: u32::MAX,
+        },
+    );
+    q.credit.accept(3);
     assert_eq!(
         q.room(),
         5,
@@ -153,8 +171,14 @@ fn room_correct_across_u32_wrap() {
 #[test]
 fn room_recovers_when_consumed_overtakes_pushed() {
     let mut q = AxisQueue::new(4);
-    q.pushed = 100;
-    q.consumed = 101;
+    q.credit.accept(100);
+    q.credit.observe(
+        RetiredBy::Pulse as usize,
+        execution_credit::Progress {
+            consumed: 101,
+            retired: 0,
+        },
+    );
     assert_eq!(
         q.room(),
         4,
@@ -167,8 +191,14 @@ fn room_recovers_when_consumed_overtakes_pushed() {
 fn schedule_resends_orphan_when_consumed_overtook_pushed() {
     let key = AxisKey { mcu_id: 1, axis: 0 };
     let mut q = AxisQueue::new(8);
-    q.pushed = 100;
-    q.consumed = 101;
+    q.credit.accept(100);
+    q.credit.observe(
+        RetiredBy::Pulse as usize,
+        execution_credit::Progress {
+            consumed: 101,
+            retired: 0,
+        },
+    );
     q.spans.push_back(make_span(101));
     let mut queues: BTreeMap<AxisKey, AxisQueue> = BTreeMap::new();
     queues.insert(key, q);
@@ -883,8 +913,6 @@ fn queue_pump<S: SpanSink>(
 ) -> Pump<S> {
     let mut queues = BTreeMap::new();
     let mut q = AxisQueue::new(1);
-    q.pushed = 1;
-    q.retired = 0;
     q.spans.push_back(make_span(0));
     queues.insert(key, q);
     Pump {
@@ -913,7 +941,9 @@ fn stalled_queue_pump(
     consumption_stall_fatal: Duration,
     on_drip_stall: impl Fn(String) + Send + 'static,
 ) -> Pump<NullSink> {
-    queue_pump(key, consumption_stall_fatal, on_drip_stall, NullSink)
+    let mut pump = queue_pump(key, consumption_stall_fatal, on_drip_stall, NullSink);
+    pump.queues.get_mut(&key).unwrap().credit.accept(1);
+    pump
 }
 
 #[test]
@@ -922,7 +952,6 @@ fn send_pass_deadline_yields_with_work_pending() {
     let sink = RecordingSink::new();
     let mut pump = queue_pump(key, Duration::from_secs(1), |_| {}, sink.clone());
     let q = pump.queues.get_mut(&key).unwrap();
-    q.pushed = 0;
     q.spans.clear();
     q.ring_depth = 4_000;
     let queued: u64 = 3_000;
@@ -1016,6 +1045,7 @@ fn rejected_multi_axis_halt_reports_once_and_does_not_acknowledge() {
     let key = AxisKey { mcu_id: 1, axis: 0 };
     let sibling = AxisKey { mcu_id: 1, axis: 1 };
     let mut pump = queue_pump(key, Duration::from_secs(1), |_| {}, CutRejectingSink);
+    pump.queues.get_mut(&key).unwrap().credit.accept(1);
     let (fatal_tx, fatal_rx) = mpsc::channel();
     pump.callbacks.on_fatal_transport = Box::new(move |key, _| fatal_tx.send(key).unwrap());
     let (ack_tx, ack_rx) = mpsc::sync_channel(1);
@@ -1031,7 +1061,7 @@ fn rejected_multi_axis_halt_reports_once_and_does_not_acknowledge() {
         Err(mpsc::TryRecvError::Disconnected)
     ));
     assert_eq!(pump.queues[&key].spans.len(), 1);
-    assert_eq!(pump.queues[&key].abandoned, 0);
+    assert_eq!(pump.queues[&key].credit.snapshot().abandoned, 0);
 }
 
 #[test]
@@ -1052,7 +1082,6 @@ fn send_rejected_while_halted_discards_bundle_and_infers_halt() {
     let mut pump = queue_pump(key, Duration::from_secs(1), |_| {}, HaltedSink);
     let queue = pump.queues.get_mut(&key).unwrap();
     queue.ring_depth = 4;
-    queue.pushed = 0;
     let (abandoned_tx, abandoned_rx) = mpsc::channel();
     pump.callbacks.on_abandon =
         Box::new(move |abandoned_key, count| abandoned_tx.send((abandoned_key, count)).unwrap());
@@ -1111,22 +1140,21 @@ fn mixed_endpoint_groups_commit_acceptance_not_wire_progress() {
         reject_phase: std::sync::atomic::AtomicBool::new(true),
     };
     let mut pump = queue_pump(pulse, Duration::from_secs(1), |_| {}, sink);
-    pump.queues.get_mut(&pulse).unwrap().pushed = 0;
     let mut phase_queue = AxisQueue::new(1);
     phase_queue.spans.push_back(make_span(0));
     pump.queues.insert(phase, phase_queue);
 
     pump.send_ready().unwrap();
     assert!(pump.queues[&pulse].spans.is_empty());
-    assert_eq!(pump.queues[&pulse].pushed, 1);
-    assert_eq!(pump.queues[&pulse].retired, 0);
+    assert_eq!(pump.queues[&pulse].credit.snapshot().pushed, 1);
+    assert_eq!(pump.queues[&pulse].credit.snapshot().retired, 0);
     pump.send_ready().unwrap();
     assert_eq!(pump.queues[&phase].spans.len(), 1);
-    assert_eq!(pump.queues[&phase].pushed, 0);
+    assert_eq!(pump.queues[&phase].credit.snapshot().pushed, 0);
     pump.sink.reject_phase.store(false, Ordering::Relaxed);
     pump.send_ready().unwrap();
     assert!(pump.queues[&phase].spans.is_empty());
-    assert_eq!(pump.queues[&phase].pushed, 1);
+    assert_eq!(pump.queues[&phase].credit.snapshot().pushed, 1);
     assert_eq!(*pump.sink.accepted.lock_ok(), vec![0, 1]);
 }
 
@@ -1196,7 +1224,7 @@ fn consumption_stall_resets_when_heartbeat_advances_counter() {
         escalated_cb.lock_ok().push(msg)
     });
     pump.queues.get_mut(&key).unwrap().ring_depth = 2;
-    pump.queues.get_mut(&key).unwrap().pushed = 2;
+    pump.queues.get_mut(&key).unwrap().credit.accept(1);
 
     pump.send_ready().unwrap();
     let (_, consumed_at_onset, _) = pump
@@ -1213,7 +1241,7 @@ fn consumption_stall_resets_when_heartbeat_advances_counter() {
         retired_counts: vec![0],
         retired_by: RetiredBy::Pulse,
     }));
-    pump.queues.get_mut(&key).unwrap().pushed = 3;
+    pump.queues.get_mut(&key).unwrap().credit.accept(1);
 
     let result = pump.send_ready();
     assert!(

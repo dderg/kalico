@@ -656,22 +656,42 @@ fn halt_before_pulse_progress_releases_capacity_without_claiming_playback() {
     h.endpoint
         .send_frames(MCU_ID, &[axis_frame(linear_run(2_000, 0.0, 1.0, 2))])
         .unwrap();
-    queue.pushed = 2;
+    queue.credit.accept(2);
     assert_eq!(h.sent_moves(), 0);
-    for cut in h.endpoint.abort_axes(&[0]).unwrap() {
-        queue.credit_cut(cut);
-    }
-    assert_eq!(queue.abandon_accepted(), 2);
+    assert_eq!(
+        queue
+            .credit
+            .interrupt(h.endpoint.abort_axes(&[0]).unwrap().into_iter().map(|cut| {
+                execution_credit::Cut {
+                    source: cut.by as usize,
+                    before: execution_credit::Progress {
+                        consumed: cut.before.0,
+                        retired: cut.before.1,
+                    },
+                    after: execution_credit::Progress {
+                        consumed: cut.after.0,
+                        retired: cut.after.1,
+                    },
+                }
+            })),
+        2
+    );
     h.endpoint.tick().unwrap();
     assert_eq!(h.sent_moves(), 0);
     let credit = h.latest_heartbeat().unwrap();
-    queue.credit(
-        crate::pump::RetiredBy::Pulse,
-        credit.consumed_counts.unwrap()[0],
-        credit.retired_counts[0],
+    queue.credit.observe(
+        crate::pump::RetiredBy::Pulse as usize,
+        execution_credit::Progress {
+            consumed: credit.consumed_counts.unwrap()[0],
+            retired: credit.retired_counts[0],
+        },
     );
     assert_eq!(
-        (queue.retired, queue.abandoned, queue.outstanding()),
+        (
+            queue.credit.snapshot().retired,
+            queue.credit.snapshot().abandoned,
+            queue.credit.outstanding()
+        ),
         (0, 2, 0)
     );
     assert_eq!(queue.room(), SHIM_RING_DEPTH);
@@ -679,7 +699,7 @@ fn halt_before_pulse_progress_releases_capacity_without_claiming_playback() {
     h.endpoint
         .send_frames(MCU_ID, &[axis_frame(linear_run(2_000, 0.0, 0.2, 2))])
         .unwrap();
-    queue.pushed += 2;
+    queue.credit.accept(2);
     h.endpoint.tick().unwrap();
     let sent = Arc::clone(&h.sent);
     let sent_steps = || {
@@ -699,25 +719,37 @@ fn halt_before_pulse_progress_releases_capacity_without_claiming_playback() {
     }
     assert_eq!(h.barriers.lock_ok().len(), 1);
     let credit = h.latest_heartbeat().unwrap();
-    queue.credit(
-        crate::pump::RetiredBy::Pulse,
-        credit.consumed_counts.unwrap()[0],
-        credit.retired_counts[0],
+    queue.credit.observe(
+        crate::pump::RetiredBy::Pulse as usize,
+        execution_credit::Progress {
+            consumed: credit.consumed_counts.unwrap()[0],
+            retired: credit.retired_counts[0],
+        },
     );
-    assert_eq!(queue.consumed, 2);
+    assert_eq!(queue.credit.snapshot().consumed, 2);
     assert_eq!(
-        (queue.retired, queue.abandoned, queue.outstanding()),
+        (
+            queue.credit.snapshot().retired,
+            queue.credit.snapshot().abandoned,
+            queue.credit.outstanding()
+        ),
         (0, 2, 2)
     );
     h.ack_sent_barriers();
     let credit = h.latest_heartbeat().unwrap();
-    queue.credit(
-        crate::pump::RetiredBy::Pulse,
-        credit.consumed_counts.unwrap()[0],
-        credit.retired_counts[0],
+    queue.credit.observe(
+        crate::pump::RetiredBy::Pulse as usize,
+        execution_credit::Progress {
+            consumed: credit.consumed_counts.unwrap()[0],
+            retired: credit.retired_counts[0],
+        },
     );
     assert_eq!(
-        (queue.retired, queue.abandoned, queue.outstanding()),
+        (
+            queue.credit.snapshot().retired,
+            queue.credit.snapshot().abandoned,
+            queue.credit.outstanding()
+        ),
         (2, 2, 0)
     );
     assert_eq!(queue.room(), SHIM_RING_DEPTH);
@@ -726,12 +758,21 @@ fn halt_before_pulse_progress_releases_capacity_without_claiming_playback() {
     }
     assert!(h.barriers.lock_ok().is_empty());
     assert_eq!(sent_steps(), 20);
-    queue.credit(
-        crate::pump::RetiredBy::Pulse,
-        h.endpoint.shim.consumed_counts()[0],
-        h.endpoint.published_counts()[0],
+    queue.credit.observe(
+        crate::pump::RetiredBy::Pulse as usize,
+        execution_credit::Progress {
+            consumed: h.endpoint.shim.consumed_counts()[0],
+            retired: h.endpoint.published_counts()[0],
+        },
     );
-    assert_eq!((queue.consumed, queue.retired, queue.abandoned), (2, 2, 2));
+    assert_eq!(
+        (
+            queue.credit.snapshot().consumed,
+            queue.credit.snapshot().retired,
+            queue.credit.snapshot().abandoned
+        ),
+        (2, 2, 2)
+    );
 }
 
 #[test]

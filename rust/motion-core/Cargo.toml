@@ -9,6 +9,7 @@ license.workspace = true
 
 [dependencies]
 host-rt = { path = "../host-rt" }
+execution-credit = { path = "../execution-credit" }
 mcu-protocol = { path = "../mcu-protocol" }
 trajectory = { path = "../trajectory" }
 geometry = { path = "../geometry" }

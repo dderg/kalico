@@ -1,0 +1,11 @@
+[package]
+name = "execution-credit"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+description = "Dependency-free execution credit accounting and interruption reconciliation."
+license.workspace = true
+
+[lints]
+workspace = true

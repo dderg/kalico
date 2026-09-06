@@ -946,13 +946,31 @@ fn halt_before_phase_progress_abandons_acceptance_and_resume_retires_only_new_wo
         .send_frames(MCU_ID, &[frame(0, vec![span(0, 0.0, 10.0, 0.05)])])
         .unwrap();
     *h.readback.lock_ok() = Some((0, 0));
-    queue.pushed = 1;
-    for cut in h.endpoint.abort_axes(&[0]).unwrap() {
-        queue.credit_cut(cut);
-    }
-    assert_eq!(queue.abandon_accepted(), 1);
+    queue.credit.accept(1);
     assert_eq!(
-        (queue.retired, queue.abandoned, queue.outstanding()),
+        queue
+            .credit
+            .interrupt(h.endpoint.abort_axes(&[0]).unwrap().into_iter().map(|cut| {
+                execution_credit::Cut {
+                    source: cut.by as usize,
+                    before: execution_credit::Progress {
+                        consumed: cut.before.0,
+                        retired: cut.before.1,
+                    },
+                    after: execution_credit::Progress {
+                        consumed: cut.after.0,
+                        retired: cut.after.1,
+                    },
+                }
+            })),
+        1
+    );
+    assert_eq!(
+        (
+            queue.credit.snapshot().retired,
+            queue.credit.snapshot().abandoned,
+            queue.credit.outstanding()
+        ),
         (0, 1, 0)
     );
     h.endpoint.tick().unwrap();
@@ -961,7 +979,7 @@ fn halt_before_phase_progress_abandons_acceptance_and_resume_retires_only_new_wo
     h.endpoint
         .send_frames(MCU_ID, &[frame(0, vec![span(0, 0.0, 2.0, 0.05)])])
         .unwrap();
-    queue.pushed += 1;
+    queue.credit.accept(1);
     h.endpoint.tick().unwrap();
     let sent = h.taken();
     let anchors: Vec<&Sent> = sent
@@ -987,33 +1005,47 @@ fn halt_before_phase_progress_abandons_acceptance_and_resume_retires_only_new_wo
         (1..=100).map(|sample| sample * 2).collect::<Vec<i32>>(),
         "every 500-cycle sample follows only the resumed 2 mm ramp through its endpoint"
     );
-    queue.credit(
-        crate::pump::RetiredBy::Phase,
-        h.endpoint.consumed_counts()[0],
-        h.endpoint.retired_counts()[0],
+    queue.credit.observe(
+        crate::pump::RetiredBy::Phase as usize,
+        execution_credit::Progress {
+            consumed: h.endpoint.consumed_counts()[0],
+            retired: h.endpoint.retired_counts()[0],
+        },
     );
-    assert_eq!(queue.outstanding(), 1);
+    assert_eq!(queue.credit.outstanding(), 1);
     h.endpoint.mcu_retired().record(&[0], &[49_999]);
     h.endpoint.tick().unwrap();
-    queue.credit(
-        crate::pump::RetiredBy::Phase,
-        h.endpoint.consumed_counts()[0],
-        h.endpoint.retired_counts()[0],
+    queue.credit.observe(
+        crate::pump::RetiredBy::Phase as usize,
+        execution_credit::Progress {
+            consumed: h.endpoint.consumed_counts()[0],
+            retired: h.endpoint.retired_counts()[0],
+        },
     );
     assert_eq!(
-        (queue.retired, queue.abandoned, queue.outstanding()),
+        (
+            queue.credit.snapshot().retired,
+            queue.credit.snapshot().abandoned,
+            queue.credit.outstanding()
+        ),
         (0, 1, 1),
         "the resumed view cannot retire before playback reaches its endpoint"
     );
     h.endpoint.mcu_retired().record(&[0], &[50_000]);
     h.endpoint.tick().unwrap();
-    queue.credit(
-        crate::pump::RetiredBy::Phase,
-        h.endpoint.consumed_counts()[0],
-        h.endpoint.retired_counts()[0],
+    queue.credit.observe(
+        crate::pump::RetiredBy::Phase as usize,
+        execution_credit::Progress {
+            consumed: h.endpoint.consumed_counts()[0],
+            retired: h.endpoint.retired_counts()[0],
+        },
     );
     assert_eq!(
-        (queue.retired, queue.abandoned, queue.outstanding()),
+        (
+            queue.credit.snapshot().retired,
+            queue.credit.snapshot().abandoned,
+            queue.credit.outstanding()
+        ),
         (1, 1, 0)
     );
     assert_eq!(queue.room(), 64);

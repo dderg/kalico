@@ -124,7 +124,7 @@ fn idle_when_empty() {
 fn full_ring_does_not_block_another_mcu() {
     let mut queues = BTreeMap::new();
     let mut a = q_with(2, &[10]);
-    a.pushed = 2;
+    a.credit.accept(2);
     queues.insert(AxisKey { mcu_id: 1, axis: 0 }, a);
     queues.insert(AxisKey { mcu_id: 2, axis: 0 }, q_with(8, &[20]));
     match schedule(&queues, limits(255), &unbounded(&queues)) {
@@ -140,10 +140,10 @@ fn full_ring_does_not_block_another_mcu() {
 fn stalls_when_every_ring_is_full() {
     let mut queues = BTreeMap::new();
     let mut a = q_with(2, &[10]);
-    a.pushed = 2;
+    a.credit.accept(2);
     queues.insert(AxisKey { mcu_id: 1, axis: 0 }, a);
     let mut b = q_with(3, &[20]);
-    b.pushed = 3;
+    b.credit.accept(3);
     queues.insert(AxisKey { mcu_id: 2, axis: 0 }, b);
     assert_eq!(
         stall(schedule(&queues, limits(255), &unbounded(&queues))),
@@ -160,14 +160,20 @@ fn a_consumed_view_frees_the_ring_slot_ahead_of_retirement() {
     let key = AxisKey { mcu_id: 1, axis: 0 };
     let mut queues = BTreeMap::new();
     let mut q = q_with(1, &[10]);
-    q.pushed = 1;
+    q.credit.accept(1);
     queues.insert(key, q);
     assert_eq!(
         stall(schedule(&queues, limits(255), &unbounded(&queues))),
         (Some(key), false)
     );
 
-    queues.get_mut(&key).unwrap().credit(RetiredBy::Pulse, 1, 0);
+    queues.get_mut(&key).unwrap().credit.observe(
+        RetiredBy::Pulse as usize,
+        execution_credit::Progress {
+            consumed: 1,
+            retired: 0,
+        },
+    );
     match schedule(&queues, limits(255), &unbounded(&queues)) {
         Schedule::Send(frames) => assert_eq!(frames[0].key, key),
         other => panic!("a consumed view must free its slot before playback, got {other:?}"),
@@ -265,7 +271,7 @@ fn full_axis_does_not_block_same_mcu_sibling() {
     let mut q: BTreeMap<AxisKey, AxisQueue> = BTreeMap::new();
     let yq = q_with(8, &[0, 2]);
     let mut xq = q_with(1, &[1]);
-    xq.pushed = 1;
+    xq.credit.accept(1);
     q.insert(AxisKey { mcu_id: 1, axis: 1 }, yq);
     q.insert(AxisKey { mcu_id: 1, axis: 0 }, xq);
     match schedule(&q, limits(255), &unbounded(&q)) {
@@ -465,7 +471,7 @@ fn full_earliest_ring_does_not_starve_later_mcu() {
     let mut queues = BTreeMap::new();
 
     let mut mcu0_q = q_with_host(2, &[(100, 1.0)]);
-    mcu0_q.pushed = 2;
+    mcu0_q.credit.accept(2);
     queues.insert(AxisKey { mcu_id: 0, axis: 0 }, mcu0_q);
 
     queues.insert(AxisKey { mcu_id: 1, axis: 0 }, q_with_host(8, &[(50, 5.0)]));
@@ -513,7 +519,7 @@ fn a_full_lane_and_a_held_sibling_report_both() {
     let held_key = AxisKey { mcu_id: 1, axis: 1 };
     let mut queues = BTreeMap::new();
     let mut wedged = q_with_host(2, &[(10, 1.0)]);
-    wedged.pushed = 2;
+    wedged.credit.accept(2);
     queues.insert(full_key, wedged);
     queues.insert(held_key, q_with_host(8, &[(1_000, 2.0)]));
 

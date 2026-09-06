@@ -25,7 +25,7 @@ pub(super) struct DripCohort {
 
 impl DripCohort {
     pub(super) fn executed(&self, k: &AxisKey, queues: &BTreeMap<AxisKey, AxisQueue>) -> u32 {
-        let retired = queues.get(k).map_or(0, |q| q.retired);
+        let retired = queues.get(k).map_or(0, |q| q.credit.snapshot().retired);
         let baseline = self.participants[k].baseline;
         retired.wrapping_sub(baseline)
     }
@@ -36,7 +36,7 @@ impl DripCohort {
             .filter(|k| {
                 queues
                     .get(k)
-                    .is_some_and(|q| !q.spans.is_empty() || q.outstanding() != 0)
+                    .is_some_and(|q| !q.spans.is_empty() || q.credit.outstanding() != 0)
             })
             .map(|k| self.executed(k, queues))
             .min()

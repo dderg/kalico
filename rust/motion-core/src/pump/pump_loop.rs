@@ -162,18 +162,33 @@ impl<S: SpanSink> Pump<S> {
     }
 
     fn account_cut(&mut self, keys: &[AxisKey], credits: Vec<super::CutCredit>) {
-        for credit in credits {
+        for credit in &credits {
             assert!(
                 keys.contains(&credit.key),
                 "cut returned credit for an unrelated axis"
             );
-            if let Some(queue) = self.queues.get_mut(&credit.key) {
-                queue.credit_cut(credit);
-            }
         }
-        for &key in keys {
+        for (index, &key) in keys.iter().enumerate() {
+            if keys[..index].contains(&key) {
+                continue;
+            }
             if let Some(queue) = self.queues.get_mut(&key) {
-                let abandoned = queue.abandon_accepted();
+                let abandoned =
+                    queue
+                        .credit
+                        .interrupt(credits.iter().filter(|cut| cut.key == key).map(|cut| {
+                            execution_credit::Cut {
+                                source: cut.by as usize,
+                                before: execution_credit::Progress {
+                                    consumed: cut.before.0,
+                                    retired: cut.before.1,
+                                },
+                                after: execution_credit::Progress {
+                                    consumed: cut.after.0,
+                                    retired: cut.after.1,
+                                },
+                            }
+                        }));
                 if abandoned != 0 {
                     (self.callbacks.on_abandon)(key, abandoned);
                 }
@@ -280,8 +295,14 @@ impl<S: SpanSink> Pump<S> {
                     let key = AxisKey { mcu_id, axis };
                     let mut c = retired_counts[slot];
                     if let Some(q) = self.queues.get_mut(&key) {
-                        q.credit(retired_by, consumed_counts[slot], c);
-                        c = q.retired;
+                        q.credit.observe(
+                            retired_by as usize,
+                            execution_credit::Progress {
+                                consumed: consumed_counts[slot],
+                                retired: c,
+                            },
+                        );
+                        c = q.credit.snapshot().retired;
                     }
                     if let Some(co) = &mut self.cohort {
                         if let Some(participant) = co.participants.get_mut(&key) {
@@ -305,7 +326,10 @@ impl<S: SpanSink> Pump<S> {
                     .participants
                     .into_iter()
                     .map(|key| {
-                        let retired = self.queues.get(&key).map_or(0, |q| q.retired);
+                        let retired = self
+                            .queues
+                            .get(&key)
+                            .map_or(0, |q| q.credit.snapshot().retired);
                         (
                             key,
                             super::drip::DripParticipant {
@@ -803,7 +827,7 @@ impl<S: SpanSink> Pump<S> {
         let fully_settled = co.participants.keys().all(|k| {
             self.queues
                 .get(k)
-                .is_none_or(|q| q.spans.is_empty() && q.outstanding() == 0)
+                .is_none_or(|q| q.spans.is_empty() && q.credit.outstanding() == 0)
         });
         if fully_settled {
             tracing::warn!(
@@ -828,7 +852,7 @@ impl<S: SpanSink> Pump<S> {
                     k.axis,
                     co.executed(k, &self.queues),
                     self.queues.get(k).map_or(0, |q| q.spans.len()),
-                    self.queues.get(k).map_or(0, |q| q.outstanding()),
+                    self.queues.get(k).map_or(0, |q| q.credit.outstanding()),
                 )
             })
             .collect();
@@ -851,7 +875,8 @@ impl<S: SpanSink> Pump<S> {
             .queues
             .get(&stall_key)
             .expect("the scheduler stalls on a queue it found");
-        let current_consumed = q.consumed;
+        let credit = q.credit.snapshot();
+        let current_consumed = credit.consumed;
         if let (Some((mcu_clock, _)), Some(wire_end_clock)) = (
             (self.callbacks.mcu_clock_of)(stall_key.mcu_id),
             q.wire_end_clock,
@@ -865,15 +890,15 @@ impl<S: SpanSink> Pump<S> {
             .consumption_stall
             .observe(stall_key, current_consumed, now);
         if observation.log_due {
-            let awaiting_consumption = q.awaiting_consumption();
+            let awaiting_consumption = q.credit.awaiting_consumption();
             tracing::debug!(
                 subsystem = "motion",
                 event = "pump_stall_full",
                 mcu = stall_key.mcu_id,
                 axis = stall_key.axis,
-                pushed = q.pushed,
-                consumed = q.consumed,
-                retired = q.retired,
+                pushed = credit.pushed,
+                consumed = credit.consumed,
+                retired = credit.retired,
                 awaiting_consumption,
                 ring_depth = q.ring_depth,
                 room = q.room(),
@@ -887,9 +912,9 @@ impl<S: SpanSink> Pump<S> {
                 event = "pump_consumption_stall_fatal",
                 mcu = stall_key.mcu_id,
                 axis = stall_key.axis,
-                pushed = q.pushed,
-                consumed = q.consumed,
-                retired = q.retired,
+                pushed = credit.pushed,
+                consumed = credit.consumed,
+                retired = credit.retired,
                 ring_depth = q.ring_depth,
                 pending = q.spans.len(),
                 stalled_secs,
@@ -901,8 +926,8 @@ impl<S: SpanSink> Pump<S> {
                 stall_key.mcu_id,
                 stall_key.axis,
                 current_consumed,
-                q.pushed,
-                q.retired,
+                credit.pushed,
+                credit.retired,
                 q.ring_depth,
                 q.spans.len(),
             ));
@@ -919,7 +944,7 @@ impl<S: SpanSink> Pump<S> {
                 let q = self.queues.get(&f.key).expect("planned key exists");
                 AxisFrame {
                     axis: f.key.axis,
-                    new_head: q.pushed.wrapping_add(n),
+                    new_head: q.credit.accepted_head(n),
                     room: q.room(),
                     spans: f.spans,
                     guard_recorded_ns: 0,
@@ -991,8 +1016,8 @@ impl<S: SpanSink> Pump<S> {
                                     queue_key.axis,
                                     q.spans.len(),
                                     q.staged_motion,
-                                    q.pushed,
-                                    q.retired,
+                                    q.credit.snapshot().pushed,
+                                    q.credit.snapshot().retired,
                                     q.ring_depth,
                                     q.lead_secs,
                                 );
@@ -1093,7 +1118,7 @@ impl<S: SpanSink> Pump<S> {
                     }
                 }
             }
-            q.pushed = q.pushed.wrapping_add(n);
+            q.credit.accept(n);
         }
     }
 
@@ -1326,13 +1351,14 @@ impl<S: SpanSink> Pump<S> {
             .queues
             .iter()
             .map(|(k, q)| {
+                let credit = q.credit.snapshot();
                 (
                     (k.mcu_id, k.axis),
                     crate::drain::AxisDrainState {
                         pending: q.spans.len() as u32,
-                        pushed: q.pushed,
-                        retired: q.retired,
-                        abandoned: q.abandoned,
+                        pushed: credit.pushed,
+                        retired: credit.retired,
+                        abandoned: credit.abandoned,
                         staged_motion: q.staged_motion,
                         hold_tail: q.wire_hold_tail,
                     },

@@ -738,15 +738,33 @@ fn halt_before_ethercat_progress_abandons_views_without_replay_or_retirement() {
     h.sink
         .send_mcu_frames(MCU_ID, &[frame(vec![linear_span(start, 0.0, 10.0)])])
         .unwrap();
-    queue.pushed = 1;
-    for cut in h.sink.cut_staged(&[key()]).unwrap() {
-        queue.credit_cut(cut);
-    }
-    assert_eq!(queue.abandon_accepted(), 1);
+    queue.credit.accept(1);
+    assert_eq!(
+        queue
+            .credit
+            .interrupt(h.sink.cut_staged(&[key()]).unwrap().into_iter().map(|cut| {
+                execution_credit::Cut {
+                    source: cut.by as usize,
+                    before: execution_credit::Progress {
+                        consumed: cut.before.0,
+                        retired: cut.before.1,
+                    },
+                    after: execution_credit::Progress {
+                        consumed: cut.after.0,
+                        retired: cut.after.1,
+                    },
+                }
+            })),
+        1
+    );
     assert!(matches!(h.sink.drain_tick(), DrainTick::Quiet));
     assert!(h.endpoint.runs().is_empty());
     assert_eq!(
-        (queue.retired, queue.abandoned, queue.outstanding()),
+        (
+            queue.credit.snapshot().retired,
+            queue.credit.snapshot().abandoned,
+            queue.credit.outstanding()
+        ),
         (0, 1, 0)
     );
 
@@ -755,15 +773,22 @@ fn halt_before_ethercat_progress_abandons_views_without_replay_or_retirement() {
     h.sink
         .send_mcu_frames(MCU_ID, &[frame(vec![resumed])])
         .unwrap();
-    queue.pushed += 1;
+    queue.credit.accept(1);
     h.sink.progress_mcu(MCU_ID, 0).unwrap();
     assert_eq!(h.endpoint.runs().len(), 1);
     let mut filler = h.filler.lock_ok();
     filler.retire_through(AXIS, end);
     let (consumed, retired) = filler.credit(AXIS);
-    queue.credit(crate::pump::RetiredBy::EtherCat, consumed, retired);
+    queue.credit.observe(
+        crate::pump::RetiredBy::EtherCat as usize,
+        execution_credit::Progress { consumed, retired },
+    );
     assert_eq!(
-        (queue.retired, queue.abandoned, queue.outstanding()),
+        (
+            queue.credit.snapshot().retired,
+            queue.credit.snapshot().abandoned,
+            queue.credit.outstanding()
+        ),
         (1, 1, 0)
     );
     assert_eq!(queue.room(), 2);

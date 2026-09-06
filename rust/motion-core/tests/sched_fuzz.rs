@@ -91,8 +91,14 @@ struct LaneSpec {
 impl LaneSpec {
     fn build(&self) -> AxisQueue {
         let mut queue = AxisQueue::new(self.ring_depth);
-        queue.pushed = self.pushed;
-        queue.consumed = self.consumed;
+        queue.credit.accept(self.pushed);
+        queue.credit.observe(
+            motion_core::pump::RetiredBy::Pulse as usize,
+            execution_credit::Progress {
+                consumed: self.consumed,
+                retired: 0,
+            },
+        );
         for spec in &self.views {
             queue.spans.push_back(spec.build());
         }
@@ -473,7 +479,7 @@ proptest! {
         };
         for frame in &frames {
             let queue = &staged.queues[&frame.key];
-            let in_flight = queue.pushed.wrapping_sub(queue.consumed);
+            let in_flight = queue.credit.awaiting_consumption();
             if in_flight > queue.ring_depth {
                 continue;
             }

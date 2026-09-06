@@ -6,25 +6,10 @@ use trajectory::{
     ClockedMotorSpan, ContinuousAxis, MAX_SPAN_SECS, MotorGroup, MotorSpan, MotorTerm,
 };
 
-/// One reporting transport's odometers for one axis.
-#[derive(Debug, Default, Clone, Copy)]
-struct WireCredit {
-    consumed: u32,
-    retired: u32,
-    has_cut: bool,
-}
-
 #[derive(Debug)]
 pub struct AxisQueue {
     pub spans: VecDeque<ClockedMotorSpan>,
-    pub pushed: u32,
-    /// Logical totals exclude raw endpoint odometer jumps caused by cuts.
-    /// Discarded views are tracked separately from conversion and playback.
-    pub consumed: u32,
-    pub retired: u32,
-    pub abandoned_unconsumed: u32,
-    pub abandoned: u32,
-    credits: [WireCredit; RetiredBy::COUNT],
+    pub credit: execution_credit::ExecutionCredit<{ RetiredBy::COUNT }>,
     pub ring_depth: u32,
     pub lead_secs: f64,
     /// Staged views that carry motion (`!is_hold_span`), maintained
@@ -72,11 +57,7 @@ impl AxisQueue {
     pub fn new(ring_depth: u32) -> Self {
         Self {
             spans: VecDeque::new(),
-            pushed: 0,
-            consumed: 0,
-            retired: 0,
-            abandoned_unconsumed: 0,
-            abandoned: 0,
+            credit: execution_credit::ExecutionCredit::new(),
             ring_depth,
             lead_secs: MAX_LEAD_SECS,
             staged_motion: 0,
@@ -84,57 +65,11 @@ impl AxisQueue {
             wire_end_clock: None,
             seam_end_clock: None,
             seam_end_at_rest: false,
-            credits: [WireCredit::default(); RetiredBy::COUNT],
         }
     }
 
-    /// Add progress since this transport's last report, excluding cut jumps.
-    pub fn credit(&mut self, by: RetiredBy, consumed: u32, retired: u32) {
-        let credit = &mut self.credits[by as usize];
-        let consumed_delta = consumed.wrapping_sub(credit.consumed);
-        if !credit.has_cut || consumed_delta <= u32::MAX / 2 {
-            self.consumed = self.consumed.wrapping_add(consumed_delta);
-            credit.consumed = consumed;
-        }
-        let retired_delta = retired.wrapping_sub(credit.retired);
-        if !credit.has_cut || retired_delta <= u32::MAX / 2 {
-            self.retired = self.retired.wrapping_add(retired_delta);
-            credit.retired = retired;
-        }
-    }
-
-    pub fn credit_cut(&mut self, cut: super::CutCredit) {
-        self.credit(cut.by, cut.before.0, cut.before.1);
-        let credit = &mut self.credits[cut.by as usize];
-        credit.consumed = credit
-            .consumed
-            .wrapping_add(cut.after.0.wrapping_sub(cut.before.0));
-        credit.retired = credit
-            .retired
-            .wrapping_add(cut.after.1.wrapping_sub(cut.before.1));
-        credit.has_cut = true;
-    }
-
-    pub fn abandon_accepted(&mut self) -> u32 {
-        let abandoned = self.outstanding();
-        self.abandoned = self.abandoned.wrapping_add(abandoned);
-        self.abandoned_unconsumed = self.pushed.wrapping_sub(self.consumed);
-        abandoned
-    }
-
-    pub fn awaiting_consumption(&self) -> u32 {
-        self.pushed
-            .wrapping_sub(self.consumed)
-            .wrapping_sub(self.abandoned_unconsumed)
-    }
-
-    pub fn outstanding(&self) -> u32 {
-        self.pushed
-            .wrapping_sub(self.retired)
-            .wrapping_sub(self.abandoned)
-    }
     pub fn room(&self) -> u32 {
-        let in_flight = self.awaiting_consumption();
+        let in_flight = self.credit.awaiting_consumption();
         if in_flight > self.ring_depth {
             self.ring_depth
         } else {
