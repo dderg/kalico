@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Sender;
 use geometry::{CornerFitConfig, Move, MoveVelocity, SurfaceTransform, VelocityLimits};
 use trajectory::{AxisChainSet, ContinuousSegment, NudgeProfile};
 
@@ -128,12 +128,6 @@ pub struct PlannedMove {
 
 pub struct BaseSegment {
     pub segment: ContinuousSegment,
-}
-
-pub struct PipelineHandle {
-    pub input: Sender<StreamInput>,
-    pub output: Receiver<TrajectoryItem>,
-    pub threads: Vec<std::thread::JoinHandle<()>>,
 }
 
 /// What flows into the fit stage and planner: geometry, the command to stop

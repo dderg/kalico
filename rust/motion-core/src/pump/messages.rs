@@ -8,14 +8,13 @@ use super::drip::DripArm;
 use super::sched::AxisFrame;
 use crate::types::AxisKey;
 
-pub struct EnqueueMsg {
+pub struct LaneProjection {
     pub key: AxisKey,
     pub spans: Vec<ClockedMotorSpan>,
     pub epoch: crate::anchor::StreamEpoch,
     pub lead_secs: f64,
     pub source_line: u32,
     pub epoch_freq: Option<f64>,
-    pub batch_end: bool,
 }
 
 /// Records each dispatched view into the motion-history store when its
@@ -88,15 +87,9 @@ pub enum PumpMsg {
         mcu_id: u32,
         error: String,
     },
-    /// A projection rebase (nudge-path re-anchor) invalidated every lane
-    /// seam on the named lane's MCU without giving that lane any views to
-    /// carry the cut. The pump forwards it to the endpoint so the lane's
-    /// stream is cut at `at_start_clock` on the new epoch slope before its
-    /// next views arrive.
-    MarkReanchor {
-        key: AxisKey,
-        at_start_clock: u64,
-        epoch_freq: Option<f64>,
+    Endpoint {
+        command: super::EndpointCommand,
+        reply: std::sync::mpsc::SyncSender<Result<super::EndpointReply, String>>,
     },
     /// One resonance sweep, armed across every transport it names in one
     /// pass. It rides the control channel rather than the span stream
@@ -584,6 +577,13 @@ pub struct CutCredit {
 }
 
 pub trait SpanSink: Send {
+    fn endpoint_control(
+        &self,
+        _command: super::EndpointCommand,
+    ) -> Result<super::EndpointReply, String> {
+        Err("endpoint control is unsupported by this execution sink".to_string())
+    }
+
     fn send_frame(
         &self,
         key: AxisKey,

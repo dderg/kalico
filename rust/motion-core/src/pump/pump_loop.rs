@@ -9,8 +9,8 @@ use super::drip::DripCohort;
 use super::junction::{JunctionTracker, check_junction_position_continuity};
 use super::memstat::MemPressureProbe;
 use super::messages::{
-    BuzzParams, BuzzStart, BuzzToken, BuzzTransport, DrainTick, EnqueueMsg, HeartbeatMsg,
-    HistoryRecorder, PumpCallbacks, PumpMsg, SendError, SpanSink,
+    BuzzParams, BuzzStart, BuzzToken, BuzzTransport, DrainTick, HeartbeatMsg, HistoryRecorder,
+    LaneProjection, PumpCallbacks, PumpMsg, SendError, SpanSink,
 };
 use super::sched::{
     AxisFrame, AxisQueue, FramePlan, LaneRelease, ReleasePlan, Schedule,
@@ -28,15 +28,6 @@ use trajectory::ClockedMotorSpan;
 // this horizon, so raising it only deepens the buffer for sparse (long, slow)
 // moves where stalls are otherwise most likely to slip a view into the past.
 pub const MAX_LEAD_SECS: f64 = 2.0;
-
-// Bound on the planner→pump span-data channel. When the pump stops pulling
-// (ring full or at the lead horizon), the planner's dispatch send blocks once
-// this many axis-lane messages are queued — propagating backpressure to the
-// input channel and the gcode reader. It only needs to cover the pump's own
-// stalls (one wire-send transaction, ~20 ms/KiB bundle) — the staging queues
-// behind it hold the real depth — and every queued message is added latency
-// for fences and the queued commands riding them.
-pub const PUMP_DATA_CHANNEL_CAP: usize = 128;
 
 pub(super) const PUMP_INTAKE_BACKLOG_SOFT_CAP: u64 = 4096;
 pub(super) const PUMP_INTAKE_BACKLOG_HARD_CAP: u64 = 8192;
@@ -127,24 +118,29 @@ enum LaneCut {
     Continues,
 }
 
-pub(super) struct Pump<S> {
+pub(crate) struct Pump<S> {
     pub(super) queues: BTreeMap<AxisKey, AxisQueue>,
     pub(super) junctions: JunctionTracker,
     pub(super) cohort: Option<DripCohort>,
     pub(super) halted: BTreeMap<AxisKey, HaltKind>,
     pub(super) sink: S,
     pub(super) callbacks: PumpCallbacks,
-    pub(super) history: Option<HistoryRecorder>,
+    pub(crate) history: Option<HistoryRecorder>,
     pub(super) ledger: Arc<crate::drain::DrainLedger>,
     pub(super) pending_barrier_acks: Vec<std::sync::mpsc::SyncSender<()>>,
     pub(super) release_plan: ReleasePlan,
     pub(super) data_open: bool,
-    pub(super) intake_batch_open: bool,
     pub(super) consumption_stall: ConsumptionStallWatch,
     pub(super) mem_probe: MemPressureProbe,
+    pub(crate) fatal_reason: Option<String>,
 }
 
 impl<S: SpanSink> Pump<S> {
+    fn fail_transport(&mut self, key: AxisKey, reason: &str) {
+        self.fatal_reason.get_or_insert_with(|| reason.to_string());
+        (self.callbacks.on_fatal_transport)(key, reason);
+    }
+
     /// This key's staged work is void: drop it, tell the host what it lost,
     /// and forget the junction so the next view is not held contiguous with
     /// motion that never ran.
@@ -210,10 +206,7 @@ impl<S: SpanSink> Pump<S> {
                 "endpoint rejected the halt cut"
             );
             if let Some(&key) = keys.first() {
-                (self.callbacks.on_fatal_transport)(
-                    key,
-                    &format!("endpoint rejected the halt cut: {error:?}"),
-                );
+                self.fail_transport(key, &format!("endpoint rejected the halt cut: {error:?}"));
             }
         })?;
         self.account_cut(&keys, credits);
@@ -236,6 +229,21 @@ impl<S: SpanSink> Pump<S> {
     }
 
     pub(super) fn handle_control_msg(&mut self, msg: PumpMsg) -> bool {
+        if !matches!(&msg, PumpMsg::Heartbeat(_)) {
+            if let Some(reason) = &self.fatal_reason {
+                match msg {
+                    PumpMsg::Shutdown => return false,
+                    PumpMsg::Buzz { reply, .. } => {
+                        let _ = reply.send(Err(reason.clone()));
+                    }
+                    PumpMsg::Endpoint { reply, .. } => {
+                        let _ = reply.send(Err(reason.clone()));
+                    }
+                    _ => {}
+                }
+                return true;
+            }
+        }
         match msg {
             PumpMsg::Shutdown => return false,
             PumpMsg::Flush(keys) => {
@@ -250,9 +258,9 @@ impl<S: SpanSink> Pump<S> {
                         );
                         let reason = e.to_string();
                         for key in keys {
-                            (self.callbacks.on_fatal_transport)(key, &reason);
+                            self.fail_transport(key, &reason);
                         }
-                        return false;
+                        return true;
                     }
                 };
                 self.account_cut(&keys, credits);
@@ -262,7 +270,7 @@ impl<S: SpanSink> Pump<S> {
             }
             PumpMsg::Halt { keys, ack } => {
                 if self.halt_keys(keys, HaltKind::Acknowledged).is_err() {
-                    return false;
+                    return true;
                 }
                 self.pending_barrier_acks.push(ack);
             }
@@ -364,11 +372,11 @@ impl<S: SpanSink> Pump<S> {
                         error = ?e,
                         "stepcompress barrier ack rejected — invoking fatal-transport action"
                     );
-                    (self.callbacks.on_fatal_transport)(
+                    self.fail_transport(
                         AxisKey { mcu_id, axis: 0 },
                         &format!("barrier ack oid={oid} seq={seq} rejected: {e}"),
                     );
-                    return false;
+                    return true;
                 }
             }
             PumpMsg::StepcompressFatal { mcu_id, error } => {
@@ -380,23 +388,10 @@ impl<S: SpanSink> Pump<S> {
                     "stepcompress endpoint reported a fatal condition — invoking \
                      fatal-transport action"
                 );
-                (self.callbacks.on_fatal_transport)(AxisKey { mcu_id, axis: 0 }, &error);
-                return false;
+                self.fail_transport(AxisKey { mcu_id, axis: 0 }, &error);
             }
-            PumpMsg::MarkReanchor {
-                key,
-                at_start_clock,
-                epoch_freq,
-            } => {
-                tracing::info!(
-                    subsystem = "motion",
-                    event = "sibling_lane_reanchor_mark",
-                    mcu = key.mcu_id,
-                    axis = key.axis,
-                    at_start_clock,
-                    "[reanchor] projection rebase cut a sibling lane without pieces"
-                );
-                self.cut_lane_at(key, at_start_clock, epoch_freq);
+            PumpMsg::Endpoint { command, reply } => {
+                let _ = reply.send(self.sink.endpoint_control(command));
             }
             PumpMsg::Buzz { params, reply } => {
                 let armed = self.arm_buzz(&params);
@@ -489,16 +484,21 @@ impl<S: SpanSink> Pump<S> {
         Ok(BuzzToken::new(Arc::clone(&params.routes)))
     }
 
-    pub(super) fn enqueue(&mut self, msg: EnqueueMsg) {
-        let EnqueueMsg {
+    pub(crate) fn enqueue(&mut self, msg: LaneProjection) {
+        let LaneProjection {
             key,
             spans,
             epoch,
             lead_secs,
             source_line,
             epoch_freq,
-            batch_end: _,
         } = msg;
+        if self.fatal_reason.is_some() {
+            if !spans.is_empty() {
+                (self.callbacks.on_abandon)(key, spans.len() as u32);
+            }
+            return;
+        }
         if let Some(kind) = self.halted.get(&key).copied() {
             let dropped = spans.len() as u32;
             if dropped > 0 {
@@ -699,7 +699,12 @@ impl<S: SpanSink> Pump<S> {
         }
     }
 
-    fn cut_lane_at(&mut self, key: AxisKey, at_start_clock: u64, epoch_freq: Option<f64>) {
+    pub(crate) fn cut_lane_at(
+        &mut self,
+        key: AxisKey,
+        at_start_clock: u64,
+        epoch_freq: Option<f64>,
+    ) {
         self.sink.mark_reanchor(key, at_start_clock, epoch_freq);
         self.clear_lane_seam(key);
     }
@@ -765,10 +770,6 @@ impl<S: SpanSink> Pump<S> {
         }))
     }
 
-    fn wants_more_data(&self) -> bool {
-        self.data_open && (self.intake_batch_open || wants_spans(&self.queues))
-    }
-
     fn drain_control(&mut self, control_rx: &Receiver<PumpMsg>) -> Result<bool, ()> {
         let mut activity = false;
         loop {
@@ -786,27 +787,31 @@ impl<S: SpanSink> Pump<S> {
         Ok(activity)
     }
 
-    fn drain_data(&mut self, data_rx: &Receiver<EnqueueMsg>) -> bool {
-        let mut activity = false;
-        while self.wants_more_data() {
+    fn intake_one<T>(
+        &mut self,
+        data_rx: &Receiver<T>,
+        pending: &mut Option<T>,
+        intake: &mut impl FnMut(T, &mut Self),
+        bypasses_capacity: &impl Fn(&T, bool) -> bool,
+    ) -> bool {
+        if pending.is_none() && self.data_open {
             match data_rx.try_recv() {
-                Ok(e) => {
-                    activity = true;
-                    self.intake_batch_open = !e.batch_end;
-                    self.enqueue(e);
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    assert!(
-                        !self.intake_batch_open,
-                        "pump data channel disconnected before the projection batch ended"
-                    );
-                    self.data_open = false;
-                    break;
-                }
+                Ok(item) => *pending = Some(item),
+                Err(TryRecvError::Empty) => return false,
+                Err(TryRecvError::Disconnected) => self.data_open = false,
             }
         }
-        activity
+        let Some(item) = pending.as_ref() else {
+            return false;
+        };
+        if self.fatal_reason.is_none()
+            && !bypasses_capacity(item, self.drip_active())
+            && !wants_spans(&self.queues)
+        {
+            return false;
+        }
+        intake(pending.take().expect("pending item was inspected"), self);
+        true
     }
 
     fn check_cohort_deadline(&mut self) {
@@ -1125,7 +1130,7 @@ impl<S: SpanSink> Pump<S> {
     // A send pass monopolizes the loop while its synchronous wire round-trips
     // run (~2 ms per EtherCAT bundle, ~20 ms per 1 KiB serial bundle at
     // 500 kbaud), while newly produced earlier-deadline views for another
-    // axis wait in the data channel (observed: a 130 ms pass aged a z-hop
+    // axis wait in the trajectory inbox (observed: a 130 ms pass aged a z-hop
     // burst 53 ms into the MCU past). A wall-clock deadline bounds intake and
     // control latency identically on every transport; the deadline is checked
     // after each bundle, so every pass sends at least one.
@@ -1316,24 +1321,22 @@ impl<S: SpanSink> Pump<S> {
                     error = %reason,
                     "pump endpoint failed — invoking fatal-transport action"
                 );
-                (self.callbacks.on_fatal_transport)(key, &reason);
+                self.fail_transport(key, &reason);
                 Err(())
             }
         }
     }
 
-    /// Block until a channel has something for the next intake pass, or until
-    /// `timeout` elapses. Consumes nothing: `drain_control` and `drain_data`
-    /// are the only readers, so the intake machine exists exactly once.
-    fn park(
+    fn park<T>(
         &self,
         control_rx: &Receiver<PumpMsg>,
-        data_rx: &Receiver<EnqueueMsg>,
+        data_rx: &Receiver<T>,
+        pending: bool,
         timeout: Option<Duration>,
     ) {
         let mut sel = Select::new();
         sel.recv(control_rx);
-        if self.wants_more_data() {
+        if self.data_open && !pending {
             sel.recv(data_rx);
         }
         match timeout {
@@ -1346,7 +1349,7 @@ impl<S: SpanSink> Pump<S> {
         }
     }
 
-    pub(super) fn publish_ledger(&self) {
+    pub(crate) fn publish_ledger(&self) {
         let snapshot = self
             .queues
             .iter()
@@ -1368,7 +1371,14 @@ impl<S: SpanSink> Pump<S> {
         self.ledger.publish(snapshot);
     }
 
-    pub(super) fn run(&mut self, control_rx: &Receiver<PumpMsg>, data_rx: &Receiver<EnqueueMsg>) {
+    pub(crate) fn run<T>(
+        &mut self,
+        control_rx: &Receiver<PumpMsg>,
+        data_rx: &Receiver<T>,
+        mut intake: impl FnMut(T, &mut Self),
+        bypasses_capacity: impl Fn(&T, bool) -> bool,
+    ) {
+        let mut pending = None;
         loop {
             let mut activity = false;
 
@@ -1377,24 +1387,44 @@ impl<S: SpanSink> Pump<S> {
                 Err(()) => return,
             }
 
-            activity |= self.drain_data(data_rx);
+            activity |= self.intake_one(data_rx, &mut pending, &mut intake, &bypasses_capacity);
 
             self.publish_ledger();
-            for ack in self.pending_barrier_acks.drain(..) {
-                let _ = ack.send(());
+            if self.fatal_reason.is_some() {
+                self.pending_barrier_acks.clear();
+            } else {
+                for ack in self.pending_barrier_acks.drain(..) {
+                    let _ = ack.send(());
+                }
+            }
+            if self.fatal_reason.is_some() {
+                if !activity {
+                    self.park(control_rx, data_rx, pending.is_some(), None);
+                }
+                continue;
             }
 
             self.check_cohort_deadline();
 
             let pass = match self.send_ready() {
                 Ok(pass) => pass,
-                Err(()) => return,
+                Err(()) => {
+                    self.fatal_reason.get_or_insert_with(|| {
+                        "execution stopped on a fatal endpoint condition".to_string()
+                    });
+                    continue;
+                }
             };
             activity |= pass.sent;
 
             let owes_window = match self.drain_ticks() {
                 Ok(owes) => owes,
-                Err(()) => return,
+                Err(()) => {
+                    self.fatal_reason.get_or_insert_with(|| {
+                        "execution stopped while progressing endpoint output".to_string()
+                    });
+                    continue;
+                }
             };
 
             if activity {
@@ -1404,35 +1434,60 @@ impl<S: SpanSink> Pump<S> {
             self.park(
                 control_rx,
                 data_rx,
+                pending.is_some(),
                 self.wake_after(pass.deferred || owes_window),
             );
         }
     }
 }
 
-pub fn run_pump<S: SpanSink>(
+impl<S: SpanSink> Pump<S> {
+    pub(crate) fn drip_active(&self) -> bool {
+        self.cohort.is_some()
+    }
+
+    pub(crate) fn new(
+        sink: S,
+        callbacks: PumpCallbacks,
+        history: Option<HistoryRecorder>,
+        ledger: Arc<crate::drain::DrainLedger>,
+    ) -> Self {
+        Self {
+            queues: BTreeMap::new(),
+            junctions: JunctionTracker::default(),
+            cohort: None,
+            halted: BTreeMap::new(),
+            sink,
+            callbacks,
+            history,
+            ledger,
+            pending_barrier_acks: Vec::new(),
+            release_plan: ReleasePlan::default(),
+            data_open: true,
+            consumption_stall: ConsumptionStallWatch::new(CONSUMPTION_STALL_FATAL),
+            mem_probe: MemPressureProbe::new(),
+            fatal_reason: None,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn run_projection_batches<S: SpanSink>(
     control_rx: Receiver<PumpMsg>,
-    data_rx: Receiver<EnqueueMsg>,
+    data_rx: Receiver<Vec<LaneProjection>>,
     sink: S,
     callbacks: PumpCallbacks,
     history: Option<HistoryRecorder>,
     ledger: Arc<crate::drain::DrainLedger>,
 ) {
-    let mut pump = Pump {
-        queues: BTreeMap::new(),
-        junctions: JunctionTracker::default(),
-        cohort: None,
-        halted: BTreeMap::new(),
-        sink,
-        callbacks,
-        history,
-        ledger,
-        pending_barrier_acks: Vec::new(),
-        release_plan: ReleasePlan::default(),
-        data_open: true,
-        intake_batch_open: false,
-        consumption_stall: ConsumptionStallWatch::new(CONSUMPTION_STALL_FATAL),
-        mem_probe: MemPressureProbe::new(),
-    };
-    pump.run(&control_rx, &data_rx);
+    Pump::new(sink, callbacks, history, ledger).run(
+        &control_rx,
+        &data_rx,
+        |batch, pump| {
+            for projection in batch {
+                pump.enqueue(projection);
+            }
+        },
+        |_, _| false,
+    );
 }

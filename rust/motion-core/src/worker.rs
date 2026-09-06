@@ -1,5 +1,5 @@
 use crate::lock_ext::LockExt;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -7,25 +7,18 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Sender, TrySendError, bounded};
 use trajectory::AxisChainSet;
 
-use motion_pipeline::{StreamConfig, setup_stages};
+use motion_pipeline::{Pipeline, StreamConfig, TrajectoryItem};
 
 mod dispatch;
 mod ingress;
 mod pump_sink;
 mod stage_cpu;
 
-pub use dispatch::{DispatchError, SegmentSink};
+pub use dispatch::DispatchError;
 use dispatch::{Dispatcher, WorkerLinks};
-use pump_sink::PumpSink;
+use pump_sink::{Projection, PumpSink};
 
-/// Host-monotonic end of the trajectory committed to the pump. The dispatcher
-/// advances it as each segment is anchored; the ingress pacer reads the
-/// remaining runway to decide whether a silent input warrants waiting for
-/// more moves before sending `Drain`. Expressed as an `Instant` deadline so
-/// readers never touch the MCU clock domain: the dispatcher, which holds `t0`
-/// and the projected playhead anyway, does the one conversion at dispatch
-/// time. Clearing is always safe — a falsely-zero runway only causes an
-/// unnecessarily early drain — so abort paths may clear it out-of-band.
+/// The execution owner's committed host-monotonic frontier, observed by the planning pacer.
 #[derive(Debug, Default)]
 pub struct CommittedFrontier {
     deadline: Mutex<Option<Instant>>,
@@ -79,7 +72,7 @@ const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 pub enum StreamMsg {
     Move(geometry::Move),
     Flush {
-        notify: Sender<()>,
+        notify: Sender<Result<(), String>>,
     },
     /// Sequence point: resolves with the stream time at which everything
     /// submitted before it ends. `force` drains the pipeline (brake to rest)
@@ -126,20 +119,22 @@ pub enum StreamMsg {
 pub struct StreamWorkerHandle {
     sender: Sender<StreamMsg>,
     join_handle: Option<JoinHandle<()>>,
-    downstream_handles: Vec<JoinHandle<()>>,
     links: Arc<WorkerLinks>,
+    execution_control: Sender<crate::pump::PumpMsg>,
 }
 
 #[derive(Debug)]
 pub enum StreamWorkerError {
     ChannelClosed,
     ChannelFull,
+    ExecutionHalted(String),
 }
 
 impl std::fmt::Display for StreamWorkerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ChannelClosed => write!(f, "stream worker channel closed"),
+            Self::ExecutionHalted(reason) => write!(f, "execution halted: {reason}"),
             Self::ChannelFull => write!(
                 f,
                 "stream worker input channel full ({INPUT_CHANNEL_CAP} moves)"
@@ -150,28 +145,15 @@ impl std::fmt::Display for StreamWorkerError {
 
 impl std::error::Error for StreamWorkerError {}
 
-/// Connection-layer resources the pump needs: the wire sink over the live
-/// transports and the callbacks that reach back into the connection
-/// supervisor (ring depths, clock sync, endpoint-death and drip-stall
-/// escalation). The bridge assembles these; the pipeline owns the pump built
-/// from them.
-pub struct PumpResources {
+pub struct ExecutionResources {
     pub sink: crate::pump::WireSink,
     pub callbacks: crate::pump::PumpCallbacks,
     pub history: crate::pump::HistoryRecorder,
     pub drain: Arc<crate::drain::DrainLedger>,
-}
-
-/// Clock-domain and bookkeeping resources the dispatcher anchors segments
-/// against. The pump enqueue side is not here — it is created inside
-/// `setup_pipeline`, which owns both ends.
-pub struct DispatchResources {
     pub router: Arc<Mutex<host_rt::passthrough_queue::PassthroughRouter>>,
     pub anchor: Arc<Mutex<crate::anchor::Anchor>>,
     pub mcu_configs: Vec<crate::mcu_config::McuAxisConfig>,
     pub counter: Arc<AtomicU64>,
-    pub drip_active: Arc<AtomicBool>,
-    pub motion_history: Arc<Mutex<crate::motion_history::HistoryStore>>,
     pub transports: Arc<crate::axis_transport::AxisTransports>,
 }
 
@@ -183,88 +165,75 @@ pub struct MotionPipeline {
     pub pump_thread: JoinHandle<()>,
 }
 
-/// The ingress's out-of-band handle on the pump, paired with the reason the
-/// pump stopped when it died on a latched endpoint fatal: a closed control
-/// channel is then a halt to ride out while klippy shuts down, not a stage
-/// death to abort on.
-#[derive(Clone)]
-pub struct PumpLink {
-    pub control: Sender<crate::pump::PumpMsg>,
-    pub transport_fatal: Arc<Mutex<Option<String>>>,
-}
+const TRAJECTORY_CHANNEL_CAP: usize = 16;
 
-/// Boot-time constructor of the entire motion pipeline:
-/// fit stage → planner → lowerer → shaper → dispatcher → pump, wired once and
-/// never torn down. Everything downstream of the ingress — including the pump
-/// thread and the enqueue channel between dispatcher and pump — is owned
-/// here; the bridge only supplies the connection-layer resources.
 pub fn setup_pipeline(
     config: StreamConfig,
     axis_chains: AxisChainSet,
     home_pos: Vec<f64>,
-    dispatch: DispatchResources,
-    pump: PumpResources,
+    resources: ExecutionResources,
     pump_channel: (
         Sender<crate::pump::PumpMsg>,
         crossbeam_channel::Receiver<crate::pump::PumpMsg>,
     ),
 ) -> MotionPipeline {
     let (pump_control, control_rx) = pump_channel;
-    let (pump_data, data_rx) =
-        bounded::<crate::pump::EnqueueMsg>(crate::pump::PUMP_DATA_CHANNEL_CAP);
-    let transport_fatal: Arc<Mutex<Option<String>>> = Arc::default();
-    let mut callbacks = pump.callbacks;
-    let latch_fatal = callbacks.on_fatal_transport;
-    let transport_fatal_for_pump = Arc::clone(&transport_fatal);
-    callbacks.on_fatal_transport = Box::new(move |key, reason| {
-        transport_fatal_for_pump
-            .lock_ok()
-            .get_or_insert_with(|| reason.to_string());
-        latch_fatal(key, reason);
-    });
+    let (output, trajectory_rx) = bounded::<TrajectoryItem>(TRAJECTORY_CHANNEL_CAP);
+    let frontier: Arc<CommittedFrontier> = Arc::default();
+    let links = Arc::new(WorkerLinks::default());
+    stage_cpu::spawn_sampler(Arc::downgrade(&frontier));
+    let mut dispatcher = Dispatcher::new(Arc::clone(&links), Arc::clone(&frontier));
+    let admission = Arc::clone(&links);
+    let mut projection = Projection {
+        transports: resources.transports,
+        router: resources.router,
+        anchor: resources.anchor,
+        mcu_configs: resources.mcu_configs,
+        counter: resources.counter,
+        frontier: Arc::clone(&frontier),
+        frozen_projection: std::collections::HashMap::new(),
+    };
     let pump_thread = thread::Builder::new()
-        .name("push-pieces-pump".into())
+        .name("kalico-execution".into())
         .spawn(move || {
             host_rt::thread_prio::elevate_current_thread(
                 host_rt::thread_prio::PUMP_RT_PRIORITY,
-                "push-pieces-pump",
+                "kalico-execution",
             );
-            crate::pump::run_pump(
-                control_rx,
-                data_rx,
-                pump.sink,
-                callbacks,
-                Some(pump.history),
-                pump.drain,
+            let mut pump = crate::pump::Pump::new(
+                resources.sink,
+                resources.callbacks,
+                Some(resources.history),
+                resources.drain,
+            );
+            pump.run(
+                &control_rx,
+                &trajectory_rx,
+                move |item, pump| {
+                    pump.publish_ledger();
+                    if let Some(reason) = &pump.fatal_reason {
+                        dispatcher.halt(reason);
+                    }
+                    dispatcher.feed(
+                        item,
+                        &mut PumpSink {
+                            projection: &mut projection,
+                            pump,
+                        },
+                    );
+                },
+                |item, cohort_active| admission.bypasses_capacity(item, cohort_active),
             );
         })
-        .expect("spawn push-pieces-pump thread");
-    let frontier: Arc<CommittedFrontier> = Arc::default();
-    stage_cpu::spawn_sampler(Arc::downgrade(&frontier));
-    let pump_link = PumpLink {
-        control: pump_control.clone(),
-        transport_fatal,
-    };
-    let sink = PumpSink {
-        transports: dispatch.transports,
-        router: dispatch.router,
-        anchor: dispatch.anchor,
-        mcu_configs: dispatch.mcu_configs,
-        pump_tx: pump_data,
-        pump: Some(pump_link.clone()),
-        counter: dispatch.counter,
-        drip_active: dispatch.drip_active,
-        motion_history: dispatch.motion_history,
-        frontier: Arc::clone(&frontier),
-        frozen_projection: Mutex::new(std::collections::HashMap::new()),
-    };
+        .expect("spawn motion execution owner");
     let worker = StreamWorkerHandle::spawn(
         config,
         axis_chains,
         home_pos,
-        sink,
+        output,
+        links,
         frontier,
-        Some(pump_link),
+        pump_control.clone(),
     );
     MotionPipeline {
         worker,
@@ -274,54 +243,40 @@ pub fn setup_pipeline(
 }
 
 impl StreamWorkerHandle {
-    /// Wires the full stream worker: ingress → pure stages → dispatcher, all
-    /// threads spawned here as siblings, mirroring `setup_stages`. Production
-    /// (`setup_pipeline`) passes the pump-backed sink; tests pass a capture
-    /// sink and no pump.
-    pub fn spawn(
-        config: StreamConfig,
+    fn spawn(
+        mut config: StreamConfig,
         axis_chains: AxisChainSet,
         home_pos: Vec<f64>,
-        sink: impl SegmentSink,
+        output: Sender<TrajectoryItem>,
+        links: Arc<WorkerLinks>,
         frontier: Arc<CommittedFrontier>,
-        pump: Option<PumpLink>,
+        pump: Sender<crate::pump::PumpMsg>,
     ) -> Self {
         let (tx, rx) = bounded(INPUT_CHANNEL_CAP);
-        let links = Arc::new(WorkerLinks::default());
-
-        let pipeline = setup_stages(config, axis_chains, home_pos.clone(), 0.0);
-        let mut downstream_handles = pipeline.threads;
-
-        let dispatcher = Dispatcher::new(sink, Arc::clone(&links), Arc::clone(&frontier));
-        let output = pipeline.output;
-        let dispatcher_handle = thread::Builder::new()
-            .name("kalico-dispatch".to_string())
-            .spawn(move || dispatcher.run(&output))
-            .expect("spawn pipeline dispatcher thread");
-        downstream_handles.push(dispatcher_handle);
-
+        config.corner.ramp_accel_budget_mm_s2 = config.max_extrude_only_accel_mm_s2;
+        let pipeline = Pipeline::new(config, axis_chains, home_pos.clone(), 0.0);
         let ingress = ingress::Ingress {
             config,
             odometer: home_pos,
             t_next: 0.0,
-            input: pipeline.input,
+            pipeline,
+            output,
             links: Arc::clone(&links),
             frontier,
             undrained_since: None,
             worst_drain_s: 0.0,
             last_line: 0,
-            pump,
+            pump: pump.clone(),
         };
         let join = thread::Builder::new()
-            .name("kalico-stream-worker".to_string())
+            .name("kalico-planning".to_string())
             .spawn(move || ingress.run(rx))
-            .expect("spawn stream worker thread");
-
+            .expect("spawn motion planning coordinator");
         Self {
             sender: tx,
             join_handle: Some(join),
-            downstream_handles,
             links,
+            execution_control: pump,
         }
     }
 
@@ -360,14 +315,18 @@ impl StreamWorkerHandle {
         self.sender
             .send(StreamMsg::Flush { notify })
             .map_err(|_| StreamWorkerError::ChannelClosed)?;
-        done.recv().map_err(|_| StreamWorkerError::ChannelClosed)
+        done.recv()
+            .map_err(|_| StreamWorkerError::ChannelClosed)?
+            .map_err(StreamWorkerError::ExecutionHalted)
     }
 
     /// Non-blocking: `ChannelFull` means the caller must retry after
     /// yielding, exactly like `fence_start` — a blocking send here wedges
     /// the klippy reactor for as long as the backpressured pipe takes to
     /// admit one message.
-    pub fn flush_try_start(&self) -> Result<crossbeam_channel::Receiver<()>, StreamWorkerError> {
+    pub fn flush_try_start(
+        &self,
+    ) -> Result<crossbeam_channel::Receiver<Result<(), String>>, StreamWorkerError> {
         let (tx, rx) = crossbeam_channel::bounded(1);
         self.try_send_arming(StreamMsg::Flush { notify: tx })?;
         Ok(rx)
@@ -399,6 +358,10 @@ impl StreamWorkerHandle {
             })
             .map_err(|_| StreamWorkerError::ChannelClosed)?;
         rx.recv().map_err(|_| StreamWorkerError::ChannelClosed)
+    }
+
+    pub fn discard_pending(&self) {
+        self.links.discard.store(true, Ordering::Release);
     }
 
     pub fn reset(&self, pos: Vec<f64>) -> Result<(), StreamWorkerError> {
@@ -479,14 +442,14 @@ impl StreamWorkerHandle {
     pub fn shutdown(&mut self) {
         self.prepare_shutdown();
         let _ = self
+            .execution_control
+            .send_timeout(crate::pump::PumpMsg::Shutdown, SHUTDOWN_SEND_TIMEOUT);
+        let _ = self
             .sender
             .send_timeout(StreamMsg::Shutdown, SHUTDOWN_SEND_TIMEOUT);
         let deadline = Instant::now() + SHUTDOWN_JOIN_TIMEOUT;
         if let Some(h) = self.join_handle.take() {
             join_worker_thread(h, deadline);
-        }
-        for handle in self.downstream_handles.drain(..) {
-            join_worker_thread(handle, deadline);
         }
     }
 

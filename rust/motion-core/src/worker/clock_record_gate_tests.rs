@@ -8,7 +8,7 @@ use host_rt::clock::{Clock, MockClock};
 use host_rt::clock_regression::NON_RESONANT_GET_CLOCK_PERIOD_SECS;
 use host_rt::passthrough_queue::{MAX_CLOCK_RECORD_AGE_SECS, McuHandle, PassthroughRouter};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 const MCU_ID: u32 = 0;
@@ -36,7 +36,7 @@ fn stepcompress_cfg() -> McuAxisConfig {
 }
 
 fn sink() -> (
-    PumpSink,
+    Projection,
     Arc<Mutex<PassthroughRouter>>,
     McuHandle,
     Arc<MockClock>,
@@ -46,19 +46,14 @@ fn sink() -> (
         PassthroughRouter::with_clock(Arc::clone(&clock) as Arc<dyn Clock + Send + Sync>);
     let handle = router.claim_mcu("stepcompress");
     let router = Arc::new(Mutex::new(router));
-    let (tx, _rx) = crossbeam_channel::unbounded();
-    let sink = PumpSink {
+    let sink = Projection {
         transports: Arc::new(crate::axis_transport::AxisTransports::from_configs(&[])),
         router: Arc::clone(&router),
         anchor: Arc::new(Mutex::new(crate::anchor::Anchor::new())),
         mcu_configs: vec![stepcompress_cfg()],
-        pump_tx: tx,
-        pump: None,
         counter: Arc::new(AtomicU64::new(0)),
-        drip_active: Arc::new(AtomicBool::new(false)),
-        motion_history: Arc::new(Mutex::new(crate::motion_history::HistoryStore::default())),
         frontier: Arc::new(super::super::CommittedFrontier::default()),
-        frozen_projection: Mutex::new(std::collections::HashMap::new()),
+        frozen_projection: std::collections::HashMap::new(),
     };
     (sink, router, handle, clock)
 }
@@ -94,7 +89,7 @@ fn host_now(router: &Mutex<PassthroughRouter>) -> f64 {
 
 #[test]
 fn anchoring_without_any_record_is_a_loud_error() {
-    let (sink, router, _handle, _clock) = sink();
+    let (mut sink, router, _handle, _clock) = sink();
     let at = host_now(&router);
 
     let err = sink
@@ -105,12 +100,12 @@ fn anchoring_without_any_record_is_a_loud_error() {
         err,
         DispatchError::ClockRecordUnusable { mcu_id: MCU_ID, .. }
     ));
-    assert!(sink.frozen_projection.lock_ok().is_empty());
+    assert!(sink.frozen_projection.is_empty());
 }
 
 #[test]
 fn anchoring_on_an_unconverged_record_is_a_loud_error() {
-    let (sink, router, handle, _clock) = sink();
+    let (mut sink, router, handle, _clock) = sink();
     publish(&router, handle, (0.2 * FREQ) as u64, false);
 
     let err = sink
@@ -125,7 +120,7 @@ fn anchoring_on_an_unconverged_record_is_a_loud_error() {
 
 #[test]
 fn a_converged_record_anchors_and_projects_the_current_epoch() {
-    let (sink, router, handle, _clock) = sink();
+    let (mut sink, router, handle, _clock) = sink();
     let epoch_clock = (0.2 * FREQ) as u64;
     publish(&router, handle, epoch_clock, true);
     let at = host_now(&router);
@@ -146,7 +141,7 @@ fn a_converged_record_anchors_and_projects_the_current_epoch() {
 /// estimate re-enables anchoring — on the new epoch's clock, not the old one.
 #[test]
 fn a_reconnect_blocks_anchoring_until_a_fresh_estimate_arrives() {
-    let (sink, router, handle, _clock) = sink();
+    let (mut sink, router, handle, _clock) = sink();
     let previous_epoch_clock = (14.4 * FREQ) as u64;
     publish(&router, handle, previous_epoch_clock, true);
     let at = host_now(&router);
@@ -185,7 +180,7 @@ fn a_reconnect_blocks_anchoring_until_a_fresh_estimate_arrives() {
 /// past the first half-minute would refuse to move.
 #[test]
 fn a_deep_centroid_lag_does_not_block_a_live_record() {
-    let (sink, router, handle, _clock) = sink();
+    let (mut sink, router, handle, _clock) = sink();
     let epoch_clock = (14.4 * FREQ) as u64;
     publish_with_centroid_lag(&router, handle, epoch_clock, true, 13.58);
 
@@ -198,7 +193,7 @@ fn a_deep_centroid_lag_does_not_block_a_live_record() {
 /// in the MCU's past. The age must be named in the error.
 #[test]
 fn anchoring_on_a_record_the_router_stopped_updating_is_a_loud_error() {
-    let (sink, router, handle, clock) = sink();
+    let (mut sink, router, handle, clock) = sink();
     publish(&router, handle, (0.2 * FREQ) as u64, true);
     let dead_for = MAX_CLOCK_RECORD_AGE_SECS + NON_RESONANT_GET_CLOCK_PERIOD_SECS;
     clock.advance(Duration::from_secs_f64(dead_for));
@@ -224,7 +219,7 @@ fn anchoring_on_a_record_the_router_stopped_updating_is_a_loud_error() {
         }
         other => panic!("expected a stale-record error, got {other:?}"),
     }
-    assert!(sink.frozen_projection.lock_ok().is_empty());
+    assert!(sink.frozen_projection.is_empty());
 }
 
 /// Measured healthy sim worlds gap up to ~9 s between accepted estimates —
@@ -232,7 +227,7 @@ fn anchoring_on_a_record_the_router_stopped_updating_is_a_loud_error() {
 /// timer. A few missed samples must stay a warning, never a refusal to move.
 #[test]
 fn a_few_missed_samples_still_anchor() {
-    let (sink, router, handle, clock) = sink();
+    let (mut sink, router, handle, clock) = sink();
     publish(&router, handle, (0.2 * FREQ) as u64, true);
     clock.advance(Duration::from_secs_f64(
         9.0 * NON_RESONANT_GET_CLOCK_PERIOD_SECS,
@@ -247,7 +242,7 @@ fn a_few_missed_samples_still_anchor() {
 /// samples stop.
 #[test]
 fn a_live_stream_of_estimates_keeps_the_anchor_open_until_it_stops() {
-    let (sink, router, handle, clock) = sink();
+    let (mut sink, router, handle, clock) = sink();
     let period = NON_RESONANT_GET_CLOCK_PERIOD_SECS;
 
     for sample in 1..=20u64 {

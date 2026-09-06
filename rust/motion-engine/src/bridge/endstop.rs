@@ -15,8 +15,6 @@ pub(super) struct TripDeps {
     pub(super) router: Arc<Mutex<PassthroughRouter>>,
     pub(super) motion_history: Arc<Mutex<motion_core::motion_history::HistoryStore>>,
     pub(super) mcu_axis_configs: Arc<Mutex<Vec<McuAxisConfig>>>,
-    pub(super) stepcompress_endpoints:
-        Arc<Mutex<HashMap<u32, Arc<Mutex<motion_core::pump::StepcompressEndpoint>>>>>,
     pub(super) axis_transports: Arc<motion_core::axis_transport::AxisTransports>,
 }
 
@@ -34,6 +32,15 @@ impl McuConnection {
 }
 
 impl TripDeps {
+    fn endpoint_command(&self, command: motion_core::pump::EndpointCommand) -> Result<(), String> {
+        let tx = self
+            .pump_tx
+            .lock_ok()
+            .clone()
+            .ok_or_else(|| "endpoint command: execution owner is not running".to_string())?;
+        super::axis_transport_api::endpoint_command(&tx, command)
+    }
+
     fn transport(&self, mcu_id: u32) -> Option<Arc<dyn host_rt::mcu_call::McuCall>> {
         self.mcus
             .lock_ok()
@@ -127,9 +134,7 @@ pub(super) fn dispatch_endstop_trip(
                 return;
             }
             TripMatch::Final(freeze) => {
-                let run = state
-                    .take_terminal(&deps.homing.drip_active, |_| true)
-                    .unwrap();
+                let run = state.take_terminal(|_| true).unwrap();
                 (run, freeze)
             }
         }
@@ -256,20 +261,11 @@ pub(super) fn dispatch_endstop_trip(
 
             let reseed_step_counter =
                 |lane: &motion_core::homing::StepcompressLane, count: i64| -> Result<(), String> {
-                    let endpoint = deps
-                        .stepcompress_endpoints
-                        .lock_ok()
-                        .get(&lane.mcu_id)
-                        .cloned()
-                        .ok_or_else(|| {
-                            format!(
-                                "stepcompress reconcile: no shim endpoint registered for mcu {}",
-                                lane.mcu_id
-                            )
-                        })?;
-                    let mut guard = endpoint.lock_ok();
-                    guard.abort_outbound();
-                    guard.reset_motor_position(lane.motor, count)
+                    deps.endpoint_command(motion_core::pump::EndpointCommand::ReseedMotor {
+                        mcu_id: lane.mcu_id,
+                        motor: lane.motor,
+                        count,
+                    })
                 };
 
             let (final_source_mcu, final_clock) =
@@ -362,29 +358,11 @@ fn cut_frozen_motor_stream(deps: &TripDeps, freeze: RemoteFreeze) -> Result<(), 
         freeze.stepper_oid,
     )?;
     let executed = deps.step_count(&lane)?;
-    let endpoint = deps
-        .stepcompress_endpoints
-        .lock_ok()
-        .get(&lane.mcu_id)
-        .cloned()
-        .ok_or_else(|| {
-            format!(
-                "keyed trip: no shim endpoint registered for mcu {}, so oid {}'s stream cannot \
-                 be cut",
-                lane.mcu_id, lane.oid
-            )
-        })?;
-    {
-        let mut guard = endpoint.lock_ok();
-        guard
-            .freeze_motor(lane.motor, lane.trajectory_steps(executed))
-            .map_err(|e| {
-                format!(
-                    "keyed trip: freezing mcu {} axis {} motor {}: {e}",
-                    lane.mcu_id, lane.axis, lane.motor
-                )
-            })?;
-    }
+    deps.endpoint_command(motion_core::pump::EndpointCommand::FreezeMotor {
+        mcu_id: lane.mcu_id,
+        motor: lane.motor,
+        count: lane.trajectory_steps(executed),
+    })?;
     tracing::info!(
         subsystem = "trip-relay",
         event = "keyed_freeze_cut",

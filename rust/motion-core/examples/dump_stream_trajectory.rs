@@ -11,7 +11,7 @@ use std::process;
 
 use geometry::{CornerFitConfig, VelocityLimits};
 use motion_core::classify::build_move;
-use motion_pipeline::{StreamConfig, TrajectoryItem, setup_stages};
+use motion_pipeline::{Pipeline, StreamConfig, TrajectoryItem};
 use trajectory::{AxisChainSet, ContinuousSegment};
 
 const AXIS_LABELS: [&str; 4] = ["x", "y", "z", "e"];
@@ -129,17 +129,14 @@ fn main() {
         limits,
     };
 
-    let handle = setup_stages(cfg, AxisChainSet::default(), vec![0.0, 0.0, 0.0, 0.0], 0.0);
-    let output = handle.output;
-    let collector = std::thread::spawn(move || {
-        let mut segs: Vec<ContinuousSegment> = Vec::new();
-        while let Ok(item) = output.recv() {
-            if let TrajectoryItem::Seg(seg) = item {
-                segs.push(seg);
-            }
+    let mut pipeline = Pipeline::new(cfg, AxisChainSet::default(), vec![0.0; 4], 0.0);
+    let mut all: Vec<ContinuousSegment> = Vec::new();
+    let mut output = |item| {
+        if let TrajectoryItem::Seg(seg) = item {
+            all.push(seg);
         }
-        segs
-    });
+        true
+    };
     let mut p = Pos::new();
     let mut submitted = 0u64;
 
@@ -183,7 +180,7 @@ fn main() {
                         continue;
                     }
                 };
-                if handle.input.send(m.into()).is_err() {
+                if !pipeline.feed(m.into(), &mut output) {
                     eprintln!("pipeline input closed at line {submitted}");
                     process::exit(1);
                 }
@@ -194,8 +191,7 @@ fn main() {
             _ => {}
         }
     }
-    drop(handle.input);
-    let all = collector.join().expect("pipeline collector panicked");
+    assert!(pipeline.finish(&mut output));
 
     let n_axes = all.iter().map(|s| s.axes.len()).max().unwrap_or(0);
     let mut out = fs::File::create(out_path).unwrap();

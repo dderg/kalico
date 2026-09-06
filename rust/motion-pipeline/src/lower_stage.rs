@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crossbeam_channel::{Receiver, Sender};
 use geometry::path::lowering::PositionProfile;
 use geometry::{Move, SurfaceTransform};
 use trajectory::{AnalyticMoveSpan, AxisChainSet, ContinuousAxis, ContinuousSegment, SurfaceMode};
@@ -9,21 +8,6 @@ use crate::types::{BaseItem, BaseSegment, Control, PlannedItem, PlannedMove};
 
 const REST_EPS_MM_S: f64 = 1e-9;
 const WARP_BBOX_SAMPLES: usize = 8;
-
-pub fn run_lowerer(
-    input: Receiver<PlannedItem>,
-    output: Sender<BaseItem>,
-    axis_chains: AxisChainSet,
-    home_pos: Vec<f64>,
-    t_start: f64,
-) {
-    let mut lowerer = Lowerer::new(axis_chains, home_pos, t_start);
-    while let Ok(item) = input.recv() {
-        if !lowerer.feed(item, &output) {
-            return;
-        }
-    }
-}
 
 pub struct Lowerer {
     axis_chains: AxisChainSet,
@@ -46,7 +30,7 @@ impl Lowerer {
         }
     }
 
-    pub fn feed(&mut self, item: PlannedItem, output: &Sender<BaseItem>) -> bool {
+    pub fn feed(&mut self, item: PlannedItem, output: &mut impl FnMut(BaseItem) -> bool) -> bool {
         let planned = match item {
             PlannedItem::Move(planned) => planned,
             PlannedItem::Drain => {
@@ -54,7 +38,7 @@ impl Lowerer {
                     return false;
                 }
                 self.rest_hold_pending = true;
-                return output.send(BaseItem::Drain).is_ok();
+                return output(BaseItem::Drain);
             }
             PlannedItem::Control(control) => {
                 match &control {
@@ -89,13 +73,17 @@ impl Lowerer {
                     }
                     Control::Nudge { .. } | Control::Barrier(_) => {}
                 }
-                return output.send(BaseItem::Control(control)).is_ok();
+                return output(BaseItem::Control(control));
             }
         };
         self.emit_move(planned, output)
     }
 
-    fn emit_move(&mut self, planned: PlannedMove, output: &Sender<BaseItem>) -> bool {
+    fn emit_move(
+        &mut self,
+        planned: PlannedMove,
+        output: &mut impl FnMut(BaseItem) -> bool,
+    ) -> bool {
         let hold_pad = if self.rest_hold_pending {
             self.axis_chains.forward_support()
         } else {
@@ -185,10 +173,10 @@ impl Lowerer {
         self.t = t_end;
         self.has_motion_history = true;
         advance_odometer(&mut self.odometer, &span.source);
-        output.send(BaseItem::Seg(BaseSegment { segment })).is_ok()
+        output(BaseItem::Seg(BaseSegment { segment }))
     }
 
-    fn emit_settle_hold(&mut self, output: &Sender<BaseItem>) -> bool {
+    fn emit_settle_hold(&mut self, output: &mut impl FnMut(BaseItem) -> bool) -> bool {
         let settle = self.axis_chains.back_support();
         if self.rest_hold_pending || !self.has_motion_history || settle <= 0.0 {
             return true;
@@ -196,7 +184,12 @@ impl Lowerer {
         self.emit_hold(self.t + settle, 0, output)
     }
 
-    fn emit_hold(&mut self, t_end: f64, source_line: u32, output: &Sender<BaseItem>) -> bool {
+    fn emit_hold(
+        &mut self,
+        t_end: f64,
+        source_line: u32,
+        output: &mut impl FnMut(BaseItem) -> bool,
+    ) -> bool {
         let t_start = self.t;
         let z_warp = rest_z_warp(self.mesh.as_deref(), &self.odometer);
         let axes = (0..self.odometer.len())
@@ -216,7 +209,7 @@ impl Lowerer {
             source_line,
             rest_at_end: true,
         };
-        if output.send(BaseItem::Seg(BaseSegment { segment })).is_err() {
+        if !output(BaseItem::Seg(BaseSegment { segment })) {
             return false;
         }
         self.t = t_end;

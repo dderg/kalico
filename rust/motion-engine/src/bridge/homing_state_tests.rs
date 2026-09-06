@@ -2,7 +2,6 @@ use super::endstop::{TripMatch, match_trip};
 use super::homing_api::validate_trip_members;
 use super::{HomingRun, HomingState, RemoteFreeze, TripMember};
 use motion_core::lock_ext::LockExt;
-use std::sync::atomic::Ordering;
 
 const MCU: u32 = 3;
 
@@ -284,11 +283,7 @@ fn terminal_error_is_delivered_once_before_partial_work_retires() {
     state.begin(1, MCU).unwrap();
     state.arm(1).unwrap();
     state.register(run).unwrap();
-    state
-        .lifecycle
-        .lock_ok()
-        .take_terminal(&state.drip_active, |_| true)
-        .unwrap();
+    state.lifecycle.lock_ok().take_terminal(|_| true).unwrap();
     state.complete(1, Err("suppress timeout".into()));
     state.retire_partial(1, Some("first late failure".into()));
     assert_eq!(state.poll().unwrap(), Some(Err("suppress timeout".into())));
@@ -320,11 +315,7 @@ fn successful_result_waits_until_partial_work_retires() {
     state.begin(1, MCU).unwrap();
     state.arm(1).unwrap();
     state.register(run).unwrap();
-    state
-        .lifecycle
-        .lock_ok()
-        .take_terminal(&state.drip_active, |_| true)
-        .unwrap();
+    state.lifecycle.lock_ok().take_terminal(|_| true).unwrap();
     let position = geometry::MachinePos([1.0, 2.0, 3.0]);
     state.complete(1, Ok((position, position, 2)));
     assert_eq!(state.poll().unwrap(), None);
@@ -378,14 +369,10 @@ fn final_trip_claims_completion_without_unpublishing_a_partial_run() {
         let mut lifecycle = state.lifecycle.lock_ok();
         let run = lifecycle.trip_run((MCU, 0, 1)).unwrap();
         assert_eq!(match_trip(run, MCU, 0), TripMatch::Partial(None));
-        assert!(state.drip_active.load(Ordering::Acquire));
         let run = lifecycle.trip_run((MCU, 1, 2)).unwrap();
         assert_eq!(match_trip(run, MCU, 1), TripMatch::Final(None));
-        lifecycle
-            .take_terminal(&state.drip_active, |_| true)
-            .unwrap()
+        lifecycle.take_terminal(|_| true).unwrap()
     };
-    assert!(!state.drip_active.load(Ordering::Acquire));
     let position = geometry::MachinePos([1.0, 2.0, 3.0]);
     state.complete(run.cohort, Ok((position, position, 2)));
     assert_eq!(state.poll().unwrap(), Some(Ok((position, position, 2))));
@@ -401,11 +388,7 @@ fn partial_failure_replaces_success_before_the_result_can_be_polled() {
         .register(run_with(vec![member(MCU, 0, None)]))
         .unwrap();
     state.lifecycle.lock_ok().pending_suppresses = 1;
-    state
-        .lifecycle
-        .lock_ok()
-        .take_terminal(&state.drip_active, |_| true)
-        .unwrap();
+    state.lifecycle.lock_ok().take_terminal(|_| true).unwrap();
     let position = geometry::MachinePos([1.0, 2.0, 3.0]);
     state.complete(1, Ok((position, position, 2)));
     assert_eq!(state.poll().unwrap(), None);
@@ -466,11 +449,7 @@ fn abort_during_completion_releases_the_result_without_polling() {
     state
         .register(run_with(vec![member(MCU, 0, None)]))
         .unwrap();
-    let run = state
-        .lifecycle
-        .lock_ok()
-        .take_terminal(&state.drip_active, |_| true)
-        .unwrap();
+    let run = state.lifecycle.lock_ok().take_terminal(|_| true).unwrap();
     assert!(state.abort().is_none());
     assert!(state.begin(2, MCU).is_err());
     let position = geometry::MachinePos([1.0, 2.0, 3.0]);
@@ -487,11 +466,7 @@ fn abort_after_completion_releases_the_result_without_polling() {
     state
         .register(run_with(vec![member(MCU, 0, None)]))
         .unwrap();
-    let run = state
-        .lifecycle
-        .lock_ok()
-        .take_terminal(&state.drip_active, |_| true)
-        .unwrap();
+    let run = state.lifecycle.lock_ok().take_terminal(|_| true).unwrap();
     let position = geometry::MachinePos([1.0, 2.0, 3.0]);
     state.complete(run.cohort, Ok((position, position, 2)));
     assert!(state.begin(2, MCU).is_err());
@@ -510,11 +485,7 @@ fn abort_waits_for_every_partial_callback_after_terminal_completion() {
             .register(run_with(vec![member(MCU, 0, None)]))
             .unwrap();
         state.lifecycle.lock_ok().pending_suppresses = 2;
-        let run = state
-            .lifecycle
-            .lock_ok()
-            .take_terminal(&state.drip_active, |_| true)
-            .unwrap();
+        let run = state.lifecycle.lock_ok().take_terminal(|_| true).unwrap();
         if abort_before_completion {
             assert!(state.abort().is_none());
         }

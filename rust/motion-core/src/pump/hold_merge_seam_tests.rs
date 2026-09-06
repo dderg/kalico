@@ -7,7 +7,7 @@
 use super::pump_loop::Pump;
 use super::sched::append_spans_merging_holds;
 use super::stall::ConsumptionStallWatch;
-use super::{AxisKey, AxisQueue, EnqueueMsg, PumpCallbacks, PumpMsg, SendError, SpanSink};
+use super::{AxisKey, AxisQueue, LaneProjection, PumpCallbacks, PumpMsg, SendError, SpanSink};
 use crate::pump::MAX_LEAD_SECS;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
@@ -191,7 +191,7 @@ fn pump_with(callbacks: PumpCallbacks) -> Pump<NullSink> {
         pending_barrier_acks: Vec::new(),
         release_plan: crate::pump::ReleasePlan::default(),
         data_open: true,
-        intake_batch_open: false,
+        fatal_reason: None,
         consumption_stall: ConsumptionStallWatch::new(std::time::Duration::from_secs(60)),
         mem_probe: super::memstat::MemPressureProbe::new(),
     }
@@ -206,14 +206,13 @@ fn synced_pump() -> Pump<NullSink> {
 
 fn enqueue_run(pump: &mut Pump<NullSink>, key: AxisKey, count: u64) {
     for index in 0..count {
-        pump.enqueue(EnqueueMsg {
+        pump.enqueue(LaneProjection {
             key,
             spans: vec![hold(index)],
             epoch: crate::anchor::StreamEpoch::Continuation,
             lead_secs: MAX_LEAD_SECS,
             source_line: SOURCE_LINE,
             epoch_freq: None,
-            batch_end: true,
         });
     }
 }

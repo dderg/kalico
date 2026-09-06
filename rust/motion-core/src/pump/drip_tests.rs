@@ -92,12 +92,12 @@ fn stall_detection_fires_when_floor_stuck() {
     let ka = AxisKey { mcu_id: 0, axis: 0 };
     let kb = AxisKey { mcu_id: 0, axis: 1 };
     let (ctl, control_rx) = unbounded::<PumpMsg>();
-    let (data, data_rx) = unbounded::<EnqueueMsg>();
+    let (data, data_rx) = unbounded::<Vec<LaneProjection>>();
     let stall_msgs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let stall_msgs_clone = Arc::clone(&stall_msgs);
 
     let handle = std::thread::spawn(move || {
-        run_pump(
+        run_projection_batches(
             control_rx,
             data_rx,
             NullSink,
@@ -119,18 +119,20 @@ fn stall_detection_fires_when_floor_stuck() {
     }))
     .unwrap();
 
-    for key in [ka, kb] {
-        data.send(EnqueueMsg {
-            epoch_freq: None,
-            key,
-            spans: (0..20).map(|i| span_dur(i as u64, 0.003)).collect(),
-            epoch: crate::anchor::StreamEpoch::Continuation,
-            lead_secs: DRIP_WINDOW_SECS,
-            source_line: SOURCE_LINE,
-            batch_end: true,
-        })
-        .unwrap();
-    }
+    data.send(
+        [ka, kb]
+            .into_iter()
+            .map(|key| LaneProjection {
+                epoch_freq: None,
+                key,
+                spans: (0..20).map(|i| span_dur(i as u64, 0.003)).collect(),
+                epoch: crate::anchor::StreamEpoch::Continuation,
+                lead_secs: DRIP_WINDOW_SECS,
+                source_line: SOURCE_LINE,
+            })
+            .collect(),
+    )
+    .unwrap();
 
     std::thread::sleep(Duration::from_millis(200));
 
@@ -152,13 +154,13 @@ fn advancing_lane_does_not_hide_a_stalled_lane() {
     let stalled = AxisKey { mcu_id: 0, axis: 1 };
     let sink = CountingSink::new();
     let (ctl, control_rx) = unbounded::<PumpMsg>();
-    let (data, data_rx) = unbounded::<EnqueueMsg>();
+    let (data, data_rx) = unbounded::<Vec<LaneProjection>>();
     let stall_msgs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let stall_msgs_clone = Arc::clone(&stall_msgs);
 
     let sink_clone = sink.clone();
     let handle = std::thread::spawn(move || {
-        run_pump(
+        run_projection_batches(
             control_rx,
             data_rx,
             sink_clone,
@@ -174,18 +176,20 @@ fn advancing_lane_does_not_hide_a_stalled_lane() {
         );
     });
 
-    for (key, batch_end) in [(advancing, false), (stalled, true)] {
-        data.send(EnqueueMsg {
-            epoch_freq: None,
-            key,
-            spans: (0..20).map(|i| span_dur(i as u64, 0.003)).collect(),
-            epoch: crate::anchor::StreamEpoch::Continuation,
-            lead_secs: DRIP_WINDOW_SECS,
-            source_line: SOURCE_LINE,
-            batch_end,
-        })
-        .unwrap();
-    }
+    data.send(
+        [advancing, stalled]
+            .into_iter()
+            .map(|key| LaneProjection {
+                epoch_freq: None,
+                key,
+                spans: (0..20).map(|i| span_dur(i as u64, 0.003)).collect(),
+                epoch: crate::anchor::StreamEpoch::Continuation,
+                lead_secs: DRIP_WINDOW_SECS,
+                source_line: SOURCE_LINE,
+            })
+            .collect(),
+    )
+    .unwrap();
 
     let send_deadline = Instant::now() + Duration::from_secs(2);
     while sink.sent().len() < 40 {
@@ -237,13 +241,13 @@ fn fully_executed_cohort_awaiting_trip_is_not_a_stall() {
     let kb = AxisKey { mcu_id: 0, axis: 1 };
     let sink = CountingSink::new();
     let (ctl, control_rx) = unbounded::<PumpMsg>();
-    let (data, data_rx) = unbounded::<EnqueueMsg>();
+    let (data, data_rx) = unbounded::<Vec<LaneProjection>>();
     let stall_msgs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let stall_msgs_clone = Arc::clone(&stall_msgs);
 
     let sink_clone = sink.clone();
     let handle = std::thread::spawn(move || {
-        run_pump(
+        run_projection_batches(
             control_rx,
             data_rx,
             sink_clone,
@@ -265,18 +269,20 @@ fn fully_executed_cohort_awaiting_trip_is_not_a_stall() {
         timeout: Duration::from_millis(30),
     }))
     .unwrap();
-    for key in [ka, kb] {
-        data.send(EnqueueMsg {
-            epoch_freq: None,
-            key,
-            spans: (0..5).map(|i| span(i as u64)).collect(),
-            epoch: crate::anchor::StreamEpoch::Continuation,
-            lead_secs: MAX_LEAD_SECS,
-            source_line: SOURCE_LINE,
-            batch_end: true,
-        })
-        .unwrap();
-    }
+    data.send(
+        [ka, kb]
+            .into_iter()
+            .map(|key| LaneProjection {
+                epoch_freq: None,
+                key,
+                spans: (0..5).map(|i| span(i as u64)).collect(),
+                epoch: crate::anchor::StreamEpoch::Continuation,
+                lead_secs: MAX_LEAD_SECS,
+                source_line: SOURCE_LINE,
+            })
+            .collect(),
+    )
+    .unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(2);
     while sink.sent().len() < 10 {
@@ -317,11 +323,11 @@ fn a_cohort_releases_its_lanes_in_lockstep() {
     let kb = AxisKey { mcu_id: 0, axis: 1 };
     let sink = CountingSink::new();
     let (ctl, control_rx) = unbounded::<PumpMsg>();
-    let (data, data_rx) = unbounded::<EnqueueMsg>();
+    let (data, data_rx) = unbounded::<Vec<LaneProjection>>();
 
     let sink_clone = sink.clone();
     let handle = std::thread::spawn(move || {
-        run_pump(
+        run_projection_batches(
             control_rx,
             data_rx,
             sink_clone,
@@ -340,18 +346,20 @@ fn a_cohort_releases_its_lanes_in_lockstep() {
         timeout: Duration::from_secs(60),
     }))
     .unwrap();
-    for key in [ka, kb] {
-        data.send(EnqueueMsg {
-            epoch_freq: None,
-            key,
-            spans: (0..4).map(|i| span_dur(i as u64 * 10, 0.01)).collect(),
-            epoch: crate::anchor::StreamEpoch::Continuation,
-            lead_secs: DRIP_WINDOW_SECS,
-            source_line: SOURCE_LINE,
-            batch_end: key == kb,
-        })
-        .unwrap();
-    }
+    data.send(
+        [ka, kb]
+            .into_iter()
+            .map(|key| LaneProjection {
+                epoch_freq: None,
+                key,
+                spans: (0..4).map(|i| span_dur(i as u64 * 10, 0.01)).collect(),
+                epoch: crate::anchor::StreamEpoch::Continuation,
+                lead_secs: DRIP_WINDOW_SECS,
+                source_line: SOURCE_LINE,
+            })
+            .collect(),
+    )
+    .unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(2);
     while sink.sent().len() < 8 {
@@ -388,13 +396,13 @@ fn idle_participant_does_not_pin_the_cohort_floor() {
     let parked = AxisKey { mcu_id: 2, axis: 0 };
     let sink = CountingSink::new();
     let (ctl, control_rx) = unbounded::<PumpMsg>();
-    let (data, data_rx) = unbounded::<EnqueueMsg>();
+    let (data, data_rx) = unbounded::<Vec<LaneProjection>>();
     let stall_msgs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let stall_msgs_clone = Arc::clone(&stall_msgs);
 
     let sink_clone = sink.clone();
     let handle = std::thread::spawn(move || {
-        run_pump(
+        run_projection_batches(
             control_rx,
             data_rx,
             sink_clone,
@@ -418,15 +426,14 @@ fn idle_participant_does_not_pin_the_cohort_floor() {
     .unwrap();
 
     for step in 0u32..4 {
-        data.send(EnqueueMsg {
+        data.send(vec![LaneProjection {
             epoch_freq: None,
             key: active,
             spans: vec![span(u64::from(step))],
             epoch: crate::anchor::StreamEpoch::Continuation,
             lead_secs: MAX_LEAD_SECS,
             source_line: SOURCE_LINE,
-            batch_end: true,
-        })
+        }])
         .unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         while sink.sent().len() < (step + 1) as usize {
@@ -465,13 +472,13 @@ fn non_participant_enqueue_aborts_cohort_and_drops_spans() {
     let outsider = AxisKey { mcu_id: 0, axis: 3 };
     let sink = CountingSink::new();
     let (ctl, control_rx) = unbounded::<PumpMsg>();
-    let (data, data_rx) = unbounded::<EnqueueMsg>();
+    let (data, data_rx) = unbounded::<Vec<LaneProjection>>();
     let stall_msgs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let stall_msgs_clone = Arc::clone(&stall_msgs);
 
     let sink_clone = sink.clone();
     let handle = std::thread::spawn(move || {
-        run_pump(
+        run_projection_batches(
             control_rx,
             data_rx,
             sink_clone,
@@ -493,15 +500,14 @@ fn non_participant_enqueue_aborts_cohort_and_drops_spans() {
         timeout: Duration::from_secs(60),
     }))
     .unwrap();
-    data.send(EnqueueMsg {
+    data.send(vec![LaneProjection {
         epoch_freq: None,
         key: outsider,
         spans: (0..3).map(|i| span(i as u64)).collect(),
         epoch: crate::anchor::StreamEpoch::Continuation,
         lead_secs: MAX_LEAD_SECS,
         source_line: SOURCE_LINE,
-        batch_end: true,
-    })
+    }])
     .unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -537,11 +543,11 @@ fn participant_release_tracks_mcu_clock_horizon() {
     let clock: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
     let clock_for_pump = Arc::clone(&clock);
     let (ctl, control_rx) = unbounded::<PumpMsg>();
-    let (data, data_rx) = unbounded::<EnqueueMsg>();
+    let (data, data_rx) = unbounded::<Vec<LaneProjection>>();
 
     let sink_clone = sink.clone();
     let handle = std::thread::spawn(move || {
-        run_pump(
+        run_projection_batches(
             control_rx,
             data_rx,
             sink_clone,
@@ -560,15 +566,14 @@ fn participant_release_tracks_mcu_clock_horizon() {
         timeout: Duration::from_secs(60),
     }))
     .unwrap();
-    data.send(EnqueueMsg {
+    data.send(vec![LaneProjection {
         epoch_freq: None,
         key: ka,
         spans: vec![span(50), span(500)],
         epoch: crate::anchor::StreamEpoch::Continuation,
         lead_secs: DRIP_WINDOW_SECS,
         source_line: SOURCE_LINE,
-        batch_end: true,
-    })
+    }])
     .unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -603,7 +608,7 @@ fn unsynced_clock_releases_nothing_for_participants() {
     let ka = AxisKey { mcu_id: 0, axis: 0 };
     let sink = CountingSink::new();
     let (ctl, control_rx) = unbounded::<PumpMsg>();
-    let (data, data_rx) = unbounded::<EnqueueMsg>();
+    let (data, data_rx) = unbounded::<Vec<LaneProjection>>();
 
     ctl.send(PumpMsg::DripArm(DripArm {
         cohort: 13,
@@ -611,20 +616,19 @@ fn unsynced_clock_releases_nothing_for_participants() {
         timeout: Duration::from_secs(60),
     }))
     .unwrap();
-    data.send(EnqueueMsg {
+    data.send(vec![LaneProjection {
         epoch_freq: None,
         key: ka,
         spans: (10..14).map(|i| span(i as u64)).collect(),
         epoch: crate::anchor::StreamEpoch::Continuation,
         lead_secs: DRIP_WINDOW_SECS,
         source_line: SOURCE_LINE,
-        batch_end: true,
-    })
+    }])
     .unwrap();
 
     let sink_clone = sink.clone();
     let handle = std::thread::spawn(move || {
-        run_pump(
+        run_projection_batches(
             control_rx,
             data_rx,
             sink_clone,
@@ -648,12 +652,12 @@ fn unsynced_clock_releases_nothing_for_participants() {
 fn retired_regression_triggers_on_drip_stall() {
     let ka = AxisKey { mcu_id: 3, axis: 2 };
     let (ctl, control_rx) = unbounded::<PumpMsg>();
-    let (_data, data_rx) = unbounded::<EnqueueMsg>();
+    let (_data, data_rx) = unbounded::<Vec<LaneProjection>>();
     let stall_msgs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let stall_msgs_clone = Arc::clone(&stall_msgs);
 
     let handle = std::thread::spawn(move || {
-        run_pump(
+        run_projection_batches(
             control_rx,
             data_rx,
             NullSink,
@@ -703,12 +707,12 @@ fn retired_regression_triggers_on_drip_stall() {
 fn mcu_reboot_retired_to_zero_triggers_regression() {
     let ka = AxisKey { mcu_id: 1, axis: 0 };
     let (ctl, control_rx) = unbounded::<PumpMsg>();
-    let (data, data_rx) = unbounded::<EnqueueMsg>();
+    let (data, data_rx) = unbounded::<Vec<LaneProjection>>();
     let stall_msgs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let stall_msgs_clone = Arc::clone(&stall_msgs);
 
     let handle = std::thread::spawn(move || {
-        run_pump(
+        run_projection_batches(
             control_rx,
             data_rx,
             NullSink,
@@ -723,15 +727,14 @@ fn mcu_reboot_retired_to_zero_triggers_regression() {
         );
     });
 
-    data.send(EnqueueMsg {
+    data.send(vec![LaneProjection {
         epoch_freq: None,
         key: ka,
         spans: vec![span(10)],
         epoch: crate::anchor::StreamEpoch::Continuation,
         lead_secs: DRIP_WINDOW_SECS,
         source_line: SOURCE_LINE,
-        batch_end: true,
-    })
+    }])
     .unwrap();
     std::thread::sleep(Duration::from_millis(30));
     ctl.send(PumpMsg::Heartbeat(HeartbeatMsg {
@@ -776,13 +779,13 @@ fn drip_disarm_clears_cohort() {
     let outsider = AxisKey { mcu_id: 0, axis: 3 };
     let sink = CountingSink::new();
     let (ctl, control_rx) = unbounded::<PumpMsg>();
-    let (data, data_rx) = unbounded::<EnqueueMsg>();
+    let (data, data_rx) = unbounded::<Vec<LaneProjection>>();
     let stall_msgs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let stall_msgs_clone = Arc::clone(&stall_msgs);
 
     let sink_clone = sink.clone();
     let handle = std::thread::spawn(move || {
-        run_pump(
+        run_projection_batches(
             control_rx,
             data_rx,
             sink_clone,
@@ -805,15 +808,14 @@ fn drip_disarm_clears_cohort() {
     }))
     .unwrap();
     ctl.send(PumpMsg::DripDisarm(31)).unwrap();
-    data.send(EnqueueMsg {
+    data.send(vec![LaneProjection {
         epoch_freq: None,
         key: outsider,
         spans: vec![span(1)],
         epoch: crate::anchor::StreamEpoch::Continuation,
         lead_secs: MAX_LEAD_SECS,
         source_line: SOURCE_LINE,
-        batch_end: true,
-    })
+    }])
     .unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -836,12 +838,12 @@ fn drip_disarm_wrong_cohort_id_is_noop() {
     let ka = AxisKey { mcu_id: 0, axis: 0 };
     let outsider = AxisKey { mcu_id: 0, axis: 3 };
     let (ctl, control_rx) = unbounded::<PumpMsg>();
-    let (data, data_rx) = unbounded::<EnqueueMsg>();
+    let (data, data_rx) = unbounded::<Vec<LaneProjection>>();
     let stall_msgs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let stall_msgs_clone = Arc::clone(&stall_msgs);
 
     let handle = std::thread::spawn(move || {
-        run_pump(
+        run_projection_batches(
             control_rx,
             data_rx,
             NullSink,
@@ -863,15 +865,14 @@ fn drip_disarm_wrong_cohort_id_is_noop() {
     }))
     .unwrap();
     ctl.send(PumpMsg::DripDisarm(999)).unwrap();
-    data.send(EnqueueMsg {
+    data.send(vec![LaneProjection {
         epoch_freq: None,
         key: outsider,
         spans: vec![span(1)],
         epoch: crate::anchor::StreamEpoch::Continuation,
         lead_secs: MAX_LEAD_SECS,
         source_line: SOURCE_LINE,
-        batch_end: true,
-    })
+    }])
     .unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(2);

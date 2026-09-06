@@ -5,7 +5,6 @@
 //!   cargo run -p pipeline-snapshot --example kin_extract -- <file.gcode> \
 //!       <max_velocity> <max_accel> <scv> <max_jerk> <line>
 
-use crossbeam_channel::unbounded;
 use geometry::path::CurvatureProfile;
 use motion_pipeline::StreamInput;
 use motion_pipeline::fit_stage::FitStage;
@@ -29,15 +28,19 @@ fn main() {
             .expect("limits");
     let moves = build_moves(&waypoints, limits).expect("moves");
 
-    let (fitted_tx, fitted_rx) = unbounded();
-    let mut fit = FitStage::new(geometry::CornerFitConfig::default()).into_driver(fitted_tx);
+    let mut fitted = Vec::new();
+    let mut collect = |item| {
+        fitted.push(item);
+        true
+    };
+    let mut fit = FitStage::new(geometry::CornerFitConfig::default()).into_driver();
     for m in moves {
-        assert!(fit.feed(m.into()));
+        assert!(fit.feed(m.into(), &mut collect));
     }
-    assert!(fit.finish());
+    assert!(fit.finish(&mut collect));
 
     let mut i = 0usize;
-    while let Ok(item) = fitted_rx.try_recv() {
+    for item in fitted {
         let m = match item {
             StreamInput::Move(m) => m,
             _ => continue,

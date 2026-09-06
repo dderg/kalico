@@ -145,7 +145,7 @@ fn cartesian_x_axis_yields_views_anchored_on_the_exact_projection() {
     let x = msgs
         .iter()
         .find(|m| m.key == AxisKey { mcu_id: 7, axis: 0 })
-        .expect("X axis EnqueueMsg must be present");
+        .expect("X axis projection must be present");
 
     let first = x.spans.first().expect("X must have at least one view");
     assert_eq!(
@@ -166,15 +166,6 @@ fn cartesian_x_axis_yields_views_anchored_on_the_exact_projection() {
     assert!(
         msgs.iter().any(|m| m.key == AxisKey { mcu_id: 7, axis: 2 }),
         "Z axis must be emitted"
-    );
-    assert!(
-        msgs.last().expect("at least one msg").batch_end,
-        "only the last message closes the batch"
-    );
-    assert_eq!(
-        msgs.iter().filter(|m| m.batch_end).count(),
-        1,
-        "exactly one batch_end per dispatch"
     );
 }
 

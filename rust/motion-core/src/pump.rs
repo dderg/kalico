@@ -3,6 +3,10 @@ pub use crate::types::AxisKey;
 mod barrier_ledger;
 mod diag;
 mod drip;
+mod endpoint_control;
+pub use endpoint_control::{
+    EndpointBuzzSpec, EndpointCommand, EndpointReply, buzz_axis_bits, buzz_lanes,
+};
 mod junction;
 mod memstat;
 mod messages;
@@ -21,12 +25,15 @@ pub use junction::{
 };
 pub use messages::{
     BundleLimits, BuzzLane, BuzzParams, BuzzRoute, BuzzStart, BuzzToken, BuzzTransport, BuzzWave,
-    CutCredit, DrainTick, EnqueueMsg, HeartbeatMsg, HistoryRecorder, PumpCallbacks, PumpMsg,
+    CutCredit, DrainTick, HeartbeatMsg, HistoryRecorder, LaneProjection, PumpCallbacks, PumpMsg,
     RetiredBy, SendError, SpanSink,
 };
+pub use pump_loop::MAX_LEAD_SECS;
+pub(crate) use pump_loop::Pump;
 #[cfg(test)]
 pub(crate) use pump_loop::pump_past_guard_secs;
-pub use pump_loop::{MAX_LEAD_SECS, PUMP_DATA_CHANNEL_CAP, run_pump};
+#[cfg(any(test, feature = "test-support"))]
+pub use pump_loop::run_projection_batches;
 pub use sample_sink::{
     RetiredRuns, SAMPLE_BACKLOG_CEILING_RUNS, SAMPLE_LANE_PIECE_WINDOW, SampleEndpoint,
     SampleLaneConfig, SamplePacer, SamplePositionQuery, build_sample_endpoint,

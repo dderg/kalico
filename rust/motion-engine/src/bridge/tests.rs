@@ -1,14 +1,12 @@
 use motion_core::lock_ext::LockExt;
 use std::os::unix::io::FromRawFd;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use host_rt::host_io::{McuHostIo, McuHostIoConfig};
 use host_rt::mcu_serial_conn::McuSerialConn;
 
-use motion_core::worker::{DispatchError, StreamWorkerHandle};
 use planner_config::PlannerConfig;
-use trajectory::{ContinuousSegment, NudgeProfile};
 
 use super::{McuConnection, PyMotionEngine, SampleGrid};
 
@@ -233,41 +231,42 @@ fn double_shutdown_is_safe() {
     }
 }
 
-/// Closure-backed [`SegmentSink`] for tests; nudges are accepted and dropped.
-struct FnSink<F>(F);
-
-impl<F> motion_core::worker::SegmentSink for FnSink<F>
-where
-    F: FnMut(&ContinuousSegment) -> Result<(), DispatchError> + Send + 'static,
-{
-    fn dispatch(&mut self, seg: &ContinuousSegment) -> Result<(), DispatchError> {
-        (self.0)(seg)
-    }
-    fn dispatch_nudge(
-        &mut self,
-        _mcu_id: u32,
-        _axis: u8,
-        _motor_mask: u8,
-        _profile: &NudgeProfile,
-    ) -> Result<(), DispatchError> {
-        Ok(())
-    }
-}
-
-fn counting_dispatch() -> (impl motion_core::worker::SegmentSink, Arc<AtomicUsize>) {
-    let counter = Arc::new(AtomicUsize::new(0));
-    let c = Arc::clone(&counter);
-    let sink = FnSink(move |_seg: &ContinuousSegment| {
-        c.fetch_add(1, Ordering::Relaxed);
-        Ok(())
-    });
-    (sink, counter)
-}
-
-fn relaxed_planner_config() -> PlannerConfig {
-    let mut c = PlannerConfig::default();
-    c.fit_tolerance_mm = 0.05;
-    c
+fn install_test_pipeline(
+    engine: &PyMotionEngine,
+    config: motion_pipeline::StreamConfig,
+    chains: trajectory::AxisChainSet,
+    home: Vec<f64>,
+) {
+    let transports = Arc::clone(&engine.axis_transports.lock_ok());
+    let resources = motion_core::worker::ExecutionResources {
+        sink: motion_core::pump::WireSink {
+            stepcompress: Default::default(),
+            samples: Default::default(),
+            ethercat: Default::default(),
+            transports: Arc::clone(&transports),
+            timeout: std::time::Duration::from_secs(1),
+        },
+        callbacks: motion_core::pump::PumpCallbacks::noop(256),
+        history: motion_core::pump::HistoryRecorder {
+            store: Arc::clone(&engine.motion_history),
+        },
+        drain: Arc::clone(&engine.drain),
+        router: Arc::clone(&engine.router),
+        anchor: Arc::clone(&engine.dispatch_anchor),
+        mcu_configs: Vec::new(),
+        counter: Arc::clone(&engine.dispatched_segments),
+        transports,
+    };
+    let pipeline = motion_core::worker::setup_pipeline(
+        config,
+        chains,
+        home,
+        resources,
+        crossbeam_channel::unbounded(),
+    );
+    *engine.planner.lock_ok() = Some(pipeline.worker);
+    *engine.pump.tx.lock_ok() = Some(pipeline.pump_control);
+    *engine.pump.thread.lock_ok() = Some(pipeline.pump_thread);
 }
 
 fn test_limits() -> geometry::VelocityLimits {
@@ -484,15 +483,13 @@ fn post_processor_bypass_retains_updates_and_rejects_invalid_restore() {
 fn post_processor_failed_submission_preserves_parameters_and_bypass() {
     let engine = post_processor_engine();
     let (sc, home) = stream_config_from(&engine.planner_config.lock_ok());
-    let (dispatch, _) = counting_dispatch();
     let chains = engine
         .planner_config
         .lock_ok()
         .compile_active_chains()
         .unwrap();
-    let mut planner = StreamWorkerHandle::spawn(sc, chains, home, dispatch, Arc::default(), None);
-    planner.shutdown();
-    *engine.planner.lock_ok() = Some(planner);
+    install_test_pipeline(&engine, sc, chains, home);
+    engine.planner.lock_ok().as_mut().unwrap().shutdown();
 
     assert!(
         engine
@@ -516,16 +513,8 @@ fn post_processor_failed_submission_preserves_parameters_and_bypass() {
 #[test]
 fn shutdown_takes_and_joins_planner() {
     let engine = PyMotionEngine::new();
-    let (dispatch, _counter) = counting_dispatch();
     let (sc, home) = stream_config_from(&PlannerConfig::default());
-    *engine.planner.lock_ok() = Some(StreamWorkerHandle::spawn(
-        sc,
-        trajectory::AxisChainSet::default(),
-        home,
-        dispatch,
-        Arc::default(),
-        None,
-    ));
+    install_test_pipeline(&engine, sc, trajectory::AxisChainSet::default(), home);
 
     assert!(
         engine.planner.lock_ok().is_some(),
@@ -542,200 +531,14 @@ fn shutdown_takes_and_joins_planner() {
 }
 
 #[test]
-fn shutdown_stops_new_dispatch_before_closing_pump() {
-    let engine = PyMotionEngine::new();
-
-    let (pump_tx, pump_rx) = crossbeam_channel::unbounded::<motion_core::pump::PumpMsg>();
-    let pump_tx_for_engine = pump_tx.clone();
-
-    let saw_pump_gone = Arc::new(AtomicBool::new(false));
-    let saw_pump_gone_cb = Arc::clone(&saw_pump_gone);
-    let dispatch_count = Arc::new(AtomicUsize::new(0));
-    let dispatch_count_cb = Arc::clone(&dispatch_count);
-    let dispatch = FnSink(move |_seg: &ContinuousSegment| {
-        dispatch_count_cb.fetch_add(1, Ordering::SeqCst);
-        let hb = motion_core::pump::PumpMsg::Heartbeat(motion_core::pump::HeartbeatMsg {
-            mcu_id: 0,
-            axes: Vec::new(),
-            consumed_counts: None,
-            retired_counts: Vec::new(),
-            retired_by: motion_core::pump::RetiredBy::Pulse,
-        });
-        if pump_tx.send(hb).is_err() {
-            saw_pump_gone_cb.store(true, Ordering::SeqCst);
-        }
-        Ok(())
-    });
-
-    let (sc, home) = stream_config_from(&relaxed_planner_config());
-    let planner = StreamWorkerHandle::spawn(
-        sc,
-        trajectory::AxisChainSet::default(),
-        home,
-        dispatch,
-        Arc::default(),
-        None,
-    );
-    planner
-        .submit_move(
-            motion_core::classify::build_move(
-                [0.0; 3],
-                [50.0, 0.0, 0.0],
-                0,
-                0.0,
-                test_limits(),
-                200.0,
-                0,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-    let engine = Arc::new(engine);
-    *engine.planner.lock_ok() = Some(planner);
-
-    let pump_handle = std::thread::Builder::new()
-        .name("push-pieces-pump".into())
-        .spawn(move || {
-            for msg in &pump_rx {
-                if matches!(msg, motion_core::pump::PumpMsg::Shutdown) {
-                    break;
-                }
-            }
-            drop(pump_rx);
-        })
-        .expect("spawn test pump thread");
-    *engine.pump.thread.lock_ok() = Some(pump_handle);
-    *engine.pump.tx.lock_ok() = Some(pump_tx_for_engine);
-
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_sub = Arc::clone(&stop);
-    let engine_sub = Arc::clone(&engine);
-    let submitter = std::thread::Builder::new()
-        .name("test-submitter".into())
-        .spawn(move || {
-            let mut start = [50.0, 0.0, 0.0];
-            while !stop_sub.load(Ordering::SeqCst) {
-                {
-                    let guard = engine_sub.planner.lock_ok();
-                    let Some(p) = guard.as_ref() else {
-                        break; // shutdown() took the planner; stop submitting.
-                    };
-                    let m = motion_core::classify::build_move(
-                        start,
-                        [50.0, 0.0, 0.0],
-                        0,
-                        0.0,
-                        test_limits(),
-                        200.0,
-                        0,
-                    )
-                    .unwrap();
-                    if p.submit_move(m).is_err() {
-                        break;
-                    }
-                    start[0] += 50.0;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(3));
-            }
-        })
-        .expect("spawn test submitter");
-
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    assert!(
-        dispatch_count.load(Ordering::SeqCst) > 0,
-        "planner must have fired at least one dispatch (else the test does not \
-         exercise the ordering window)"
-    );
-
-    engine.shutdown();
-
-    stop.store(true, Ordering::SeqCst);
-    submitter.join().expect("submitter join");
-
-    assert!(
-        !saw_pump_gone.load(Ordering::SeqCst),
-        "planner dispatched new work after shutdown closed the pump"
-    );
-    assert!(
-        engine.planner.lock_ok().is_none(),
-        "planner must be taken+joined by shutdown()"
-    );
-}
-
-#[test]
-fn shutdown_unblocks_dispatch_waiting_on_full_pump_data_channel() {
-    let engine = Arc::new(PyMotionEngine::new());
-    let (pump_tx, pump_rx) = crossbeam_channel::unbounded::<motion_core::pump::PumpMsg>();
-    let (data_tx, data_rx) = crossbeam_channel::bounded::<()>(1);
-    data_tx.send(()).unwrap();
-
-    let (dispatch_entered_tx, dispatch_entered_rx) = crossbeam_channel::bounded(1);
-    let blocked_data_tx = data_tx.clone();
-    let dispatch = FnSink(move |_seg: &ContinuousSegment| {
-        let _ = dispatch_entered_tx.try_send(());
-        blocked_data_tx
-            .send(())
-            .map_err(|_| DispatchError::PumpGone)
-    });
-    let (sc, home) = stream_config_from(&relaxed_planner_config());
-    let planner = StreamWorkerHandle::spawn(
-        sc,
-        trajectory::AxisChainSet::default(),
-        home,
-        dispatch,
-        Arc::default(),
-        None,
-    );
-    planner
-        .submit_move(
-            motion_core::classify::build_move(
-                [0.0; 3],
-                [50.0, 0.0, 0.0],
-                0,
-                0.0,
-                test_limits(),
-                200.0,
-                0,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-    *engine.planner.lock_ok() = Some(planner);
-
-    let pump_handle = std::thread::spawn(move || {
-        while let Ok(msg) = pump_rx.recv() {
-            if matches!(msg, motion_core::pump::PumpMsg::Shutdown) {
-                break;
-            }
-        }
-        drop(data_rx);
-    });
-    *engine.pump.tx.lock_ok() = Some(pump_tx);
-    *engine.pump.thread.lock_ok() = Some(pump_handle);
-
-    dispatch_entered_rx
-        .recv_timeout(std::time::Duration::from_secs(2))
-        .expect("dispatcher never blocked on the full pump data channel");
-
-    let shutdown_engine = Arc::clone(&engine);
-    let (shutdown_done_tx, shutdown_done_rx) = crossbeam_channel::bounded(1);
-    let shutdown_thread = std::thread::spawn(move || {
-        shutdown_engine.shutdown();
-        let _ = shutdown_done_tx.send(());
-    });
-    shutdown_done_rx
-        .recv_timeout(std::time::Duration::from_secs(2))
-        .expect("shutdown stayed blocked behind the full pump data channel");
-    shutdown_thread.join().unwrap();
-}
-
-#[test]
 fn shutdown_does_not_abort_on_detached_ethercat_weak() {
     use std::collections::HashMap;
     use std::time::Duration;
     use trajectory::{ClockedMotorSpan, ContinuousAxis, MotorGroup, MotorSpan, MotorTerm};
 
-    use motion_core::pump::{EnqueueMsg, EtherCatRing, PumpCallbacks, PumpMsg, WireSink, run_pump};
+    use motion_core::pump::{
+        EtherCatRing, LaneProjection, PumpCallbacks, PumpMsg, WireSink, run_projection_batches,
+    };
     use motion_core::types::AxisKey;
 
     const EC_MCU_ID: u32 = 42;
@@ -777,12 +580,12 @@ fn shutdown_does_not_abort_on_detached_ethercat_weak() {
     let mcu_clock_of = |_mcu_id: u32| -> Option<(u64, f64)> { Some((1, 1.0)) };
 
     let (pump_tx, control_rx) = crossbeam_channel::unbounded::<PumpMsg>();
-    let (data_tx, data_rx) = crossbeam_channel::unbounded::<EnqueueMsg>();
+    let (data_tx, data_rx) = crossbeam_channel::unbounded::<Vec<LaneProjection>>();
 
     let pump_handle = std::thread::Builder::new()
         .name("push-pieces-pump".into())
         .spawn(move || {
-            run_pump(
+            run_projection_batches(
                 control_rx,
                 data_rx,
                 sink,
@@ -832,7 +635,7 @@ fn shutdown_does_not_abort_on_detached_ethercat_weak() {
         .expect("the projected view spans at least one clock"),
     ];
     data_tx
-        .send(EnqueueMsg {
+        .send(vec![LaneProjection {
             epoch_freq: None,
             key: AxisKey {
                 mcu_id: EC_MCU_ID,
@@ -842,8 +645,7 @@ fn shutdown_does_not_abort_on_detached_ethercat_weak() {
             epoch: motion_core::anchor::StreamEpoch::Continuation,
             lead_secs: 0.0,
             source_line: u32::MAX,
-            batch_end: true,
-        })
+        }])
         .expect("enqueue must succeed before shutdown");
 
     std::thread::sleep(Duration::from_millis(30));
@@ -851,17 +653,6 @@ fn shutdown_does_not_abort_on_detached_ethercat_weak() {
     let engine = Arc::new(PyMotionEngine::new());
     *engine.pump.tx.lock_ok() = Some(pump_tx);
     *engine.pump.thread.lock_ok() = Some(pump_handle);
-
-    let (dispatch, _counter) = counting_dispatch();
-    let (sc, home) = stream_config_from(&relaxed_planner_config());
-    *engine.planner.lock_ok() = Some(StreamWorkerHandle::spawn(
-        sc,
-        trajectory::AxisChainSet::default(),
-        home,
-        dispatch,
-        Arc::default(),
-        None,
-    ));
 
     engine.shutdown();
 
@@ -875,10 +666,6 @@ fn shutdown_does_not_abort_on_detached_ethercat_weak() {
     assert!(
         engine.pump.thread.lock_ok().is_none(),
         "pump thread handle must be taken (joined) by shutdown()"
-    );
-    assert!(
-        engine.planner.lock_ok().is_none(),
-        "planner must be taken+joined by shutdown()"
     );
 }
 

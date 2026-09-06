@@ -14,12 +14,11 @@
 use std::env;
 use std::fs;
 use std::process;
-use std::thread;
 use std::time::Instant;
 
 use geometry::{CornerFitConfig, VelocityLimits};
 use motion_core::classify::build_move;
-use motion_pipeline::{StreamConfig, TrajectoryItem, setup_stages};
+use motion_pipeline::{Pipeline, StreamConfig, TrajectoryItem};
 use trajectory::{AxisChainSet, CompiledChain, PostProcessorInstance};
 
 struct Pos {
@@ -131,18 +130,14 @@ fn main() {
     };
 
     let wall = Instant::now();
-    let handle = setup_stages(cfg, trident_chains(), vec![0.0; 4], 0.0);
-    let output = handle.output;
-    let collector = thread::spawn(move || {
-        let started = Instant::now();
-        let mut arrivals: Vec<(f64, f64)> = Vec::new();
-        while let Ok(item) = output.recv() {
-            if let TrajectoryItem::Seg(seg) = item {
-                arrivals.push((started.elapsed().as_secs_f64(), seg.t_end));
-            }
+    let mut pipeline = Pipeline::new(cfg, trident_chains(), vec![0.0; 4], 0.0);
+    let mut arrivals: Vec<(f64, f64)> = Vec::new();
+    let mut output = |item| {
+        if let TrajectoryItem::Seg(seg) = item {
+            arrivals.push((wall.elapsed().as_secs_f64(), seg.t_end));
         }
-        arrivals
-    });
+        true
+    };
 
     let mut p = Pos {
         pos: [0.0; 3],
@@ -194,7 +189,7 @@ fn main() {
                         continue;
                     }
                 };
-                if handle.input.send(m.into()).is_err() {
+                if !pipeline.feed(m.into(), &mut output) {
                     eprintln!("pipeline input closed at line {submitted}");
                     process::exit(1);
                 }
@@ -207,8 +202,7 @@ fn main() {
             _ => {}
         }
     }
-    drop(handle.input);
-    let arrivals = collector.join().expect("pipeline collector panicked");
+    assert!(pipeline.finish(&mut output));
     let wall_s = wall.elapsed().as_secs_f64();
     let stream_s = arrivals.last().map_or(0.0, |&(_, t)| t);
     println!(

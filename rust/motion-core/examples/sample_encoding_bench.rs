@@ -20,11 +20,10 @@
 //   cargo run --release -p motion-core --example sample_encoding_bench
 
 use std::sync::Arc;
-use std::thread;
 
 use geometry::{CornerFitConfig, VelocityLimits};
 use motion_core::classify::build_move;
-use motion_pipeline::{StreamConfig, TrajectoryItem, setup_stages};
+use motion_pipeline::{Pipeline, StreamConfig, TrajectoryItem};
 use runtime_contract::sample_run::{SAMPLE_RUN_COUNT_MAX, SAMPLE_RUN_DATA_MAX, delta_bytes};
 use step_shim::quantize::quantize_step_delta;
 use trajectory::{
@@ -87,17 +86,14 @@ fn run_pipeline() -> Vec<ContinuousSegment> {
         limits,
     };
 
-    let handle = setup_stages(cfg, bench_chains(), vec![0.0; 4], 0.0);
-    let output = handle.output;
-    let collector = thread::spawn(move || {
-        let mut segs: Vec<ContinuousSegment> = Vec::new();
-        while let Ok(item) = output.recv() {
-            if let TrajectoryItem::Seg(seg) = item {
-                segs.push(seg);
-            }
+    let mut pipeline = Pipeline::new(cfg, bench_chains(), vec![0.0; 4], 0.0);
+    let mut segs: Vec<ContinuousSegment> = Vec::new();
+    let mut output = |item| {
+        if let TrajectoryItem::Seg(seg) = item {
+            segs.push(seg);
         }
-        segs
-    });
+        true
+    };
 
     let mut moves: Vec<geometry::Move> = Vec::new();
     let mut line = 0u32;
@@ -140,10 +136,9 @@ fn run_pipeline() -> Vec<ContinuousSegment> {
     plan([38.0, 10.0, 0.0], [-38.0, -10.0, 0.0], 0.0, 300.0);
 
     for m in moves {
-        handle.input.send(m.into()).expect("pipeline input closed");
+        assert!(pipeline.feed(m.into(), &mut output));
     }
-    drop(handle.input);
-    let segs = collector.join().expect("pipeline collector panicked");
+    assert!(pipeline.finish(&mut output));
     assert!(!segs.is_empty(), "pipeline emitted no segments");
     segs
 }

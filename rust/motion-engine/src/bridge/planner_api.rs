@@ -569,64 +569,13 @@ impl PyMotionEngine {
                 ))
             })?;
         }
-        self.seed_stepcompress_shims(pos)?;
-        self.seed_sample_lanes(pos)
-    }
-
-    /// A pulse lane keeps its step counter on the host: re-anchor each such
-    /// motor's shim counter so the next drain re-emits `reset_step_clock` from
-    /// the new position.
-    fn seed_stepcompress_shims(&self, pos: geometry::MachinePos) -> PyResult<()> {
+        drop(mcus);
         let configs = self.mcu_axis_configs.lock_ok().clone();
-        let endpoints = self.stepcompress_endpoints.lock_ok().clone();
-        for cfg in configs
-            .iter()
-            .filter(|c| !c.ethercat && c.has_pulse_lanes())
-        {
-            let counts = motion_core::mcu_config::stepcompress_seed_counts(cfg, pos)
-                .map_err(PyRuntimeError::new_err)?;
-            let endpoint = endpoints.get(&cfg.mcu_id).ok_or_else(|| {
-                PyRuntimeError::new_err(format!(
-                    "position seed: no shim endpoint registered for stepcompress mcu {}",
-                    cfg.mcu_id
-                ))
-            })?;
-            endpoint.lock_ok().reset_position(&counts).map_err(|e| {
-                PyRuntimeError::new_err(format!(
-                    "position seed: shim reseed failed for mcu {}: {e:?}",
-                    cfg.mcu_id
-                ))
-            })?;
-        }
-        Ok(())
-    }
-
-    /// A phase lane's host counter is the origin its next `sample_anchor`
-    /// carries, so a rename of the rest point has to move it in step with the
-    /// `runtime_seed_position` that just moved the mcu's own axis counter.
-    fn seed_sample_lanes(&self, pos: geometry::MachinePos) -> PyResult<()> {
-        let configs = self.mcu_axis_configs.lock_ok().clone();
-        let endpoints = self.sample_endpoints.lock_ok().clone();
-        for cfg in configs
-            .iter()
-            .filter(|c| !c.ethercat && c.has_phase_lanes())
-        {
-            let counts = motion_core::mcu_config::sample_seed_counts(cfg, pos)
-                .map_err(PyRuntimeError::new_err)?;
-            let endpoint = endpoints.get(&cfg.mcu_id).ok_or_else(|| {
-                PyRuntimeError::new_err(format!(
-                    "position seed: no sample endpoint registered for phase mcu {}",
-                    cfg.mcu_id
-                ))
-            })?;
-            endpoint.lock_ok().reset_position(&counts).map_err(|e| {
-                PyRuntimeError::new_err(format!(
-                    "position seed: sample lane reseed failed for mcu {}: {e:?}",
-                    cfg.mcu_id
-                ))
-            })?;
-        }
-        Ok(())
+        self.endpoint_command(motion_core::pump::EndpointCommand::SeedPosition {
+            configs,
+            position: pos,
+        })
+        .map_err(PyRuntimeError::new_err)
     }
 
     /// Swap the active surface transform behind a pipeline drain, keeping the

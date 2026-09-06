@@ -125,9 +125,17 @@ also needs it to process heartbeat playback observations.
    and correlate positions via `motion_engine.motion_state_at`. Both ride
    the same clocksync estimates; do not mix in wall-clock or host time.
 6. **The engine's timeline is complete.** Dwells and nudges advance the
-   frontier like segments do (the dispatcher publishes them). If you catch
+   frontier like segments do (the execution owner publishes them). If you catch
    yourself adding host-side compensation for something the engine "forgot",
    the engine is where the fix goes.
+7. **One execution owner.** `kalico-execution` owns anchoring, clock projection,
+   trajectory admission, transport scheduling, pulse/sample endpoint commands,
+   and EtherCAT filler changes. Planning hands it complete `TrajectoryItem`s,
+   not per-axis transactions. Hardware pacers and wire I/O remain independent.
+   Admission barriers fence prior intake, not physical playback: once earlier
+   motion is admitted, a full staging queue must not block its trailing barrier.
+   A finite homing stroke may complete admission above the staging cap under an
+   armed cohort; physical drip windows and transport credits still limit egress.
 
 ## Why this exists (the bugs the old model shipped)
 

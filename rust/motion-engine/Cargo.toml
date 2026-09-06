@@ -44,6 +44,7 @@ snapshot = ["dep:snapshot-core"]
 extension-module = ["pyo3/extension-module"]
 
 [dev-dependencies]
+motion-core = { path = "../motion-core", features = ["test-support"] }
 mcu-transport = { path = "../mcu-transport" }
 host-rt = { path = "../host-rt", features = ["test-harness"] }
 serialport = "4"

@@ -5,6 +5,7 @@ use super::{
 use host_rt::clock::{HostSecs, PrintTime};
 use motion_core::lock_ext::LockExt;
 use motion_core::types::mcu_handle_from_raw;
+use motion_core::worker::StreamWorkerError;
 
 #[pymethods]
 impl PyMotionEngine {
@@ -66,8 +67,9 @@ impl PyMotionEngine {
             .as_ref()
             .expect("drain flush receiver just installed");
         match rx.try_recv() {
-            Ok(()) => {
+            Ok(result) => {
                 *pending = None;
+                result.map_err(|error| planner_err(StreamWorkerError::ExecutionHalted(error)))?;
                 let drained = self.drain.drained();
                 if drained {
                     self.report_drain_wait_done();
@@ -405,7 +407,9 @@ impl PyMotionEngine {
         );
     }
 
-    fn flush_try_start_inner(&self) -> PyResult<Option<crossbeam_channel::Receiver<()>>> {
+    fn flush_try_start_inner(
+        &self,
+    ) -> PyResult<Option<crossbeam_channel::Receiver<Result<(), String>>>> {
         let guard = self.planner.lock_ok();
         let planner = guard.as_ref().ok_or_else(|| {
             PyRuntimeError::new_err("planner not initialized — call init_planner first")

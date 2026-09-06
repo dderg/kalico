@@ -2,24 +2,31 @@ use super::*;
 
 #[test]
 fn a_slow_drain_reserves_runway_for_repeating_it_even_after_a_faster_drain() {
-    let (input, output) = crossbeam_channel::unbounded();
+    let (output_tx, output) = crossbeam_channel::unbounded();
+    let (pump, _control_rx) = crossbeam_channel::unbounded();
     let mut ingress = Ingress {
         config: crate::worker::tests::cfg(),
         odometer: vec![0.0; 4],
         t_next: 0.0,
-        input,
+        pipeline: motion_pipeline::Pipeline::new(
+            crate::worker::tests::cfg(),
+            trajectory::AxisChainSet::default(),
+            vec![0.0; 4],
+            0.0,
+        ),
+        output: output_tx,
         links: Arc::default(),
         frontier: Arc::default(),
         undrained_since: Some(Instant::now()),
         worst_drain_s: 0.0,
         last_line: 0,
-        pump: None,
+        pump,
     };
     let slow = Duration::from_millis(300);
     let downstream = std::thread::spawn(move || {
         for delay in [slow, Duration::ZERO, Duration::ZERO] {
             while let Ok(item) = output.recv() {
-                if let StreamInput::Control(Control::Barrier(reply)) = item {
+                if let motion_pipeline::TrajectoryItem::Control(Control::Barrier(reply)) = item {
                     std::thread::sleep(delay);
                     reply
                         .send(BarrierAck {

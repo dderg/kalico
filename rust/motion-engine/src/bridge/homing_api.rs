@@ -190,14 +190,39 @@ impl PyMotionEngine {
             self.consume_buffered_early_trips();
             Ok(())
         })();
-        if startup.is_err() {
+        if let Err(startup_error) = startup {
             self.homing.cancel_registration();
-            if let Some(tx) = self.pump.tx.lock_ok().clone() {
-                let _ = tx.send(motion_core::pump::PumpMsg::Flush(all_axis_keys));
-                let _ = tx.send(motion_core::pump::PumpMsg::DripDisarm(cohort));
+            if let Some(planner) = self.planner.lock_ok().as_ref() {
+                planner.discard_pending();
             }
+            let cancellation: Result<(), String> = (|| {
+                let tx = self.pump.tx.lock_ok().clone().ok_or_else(|| {
+                    "home_axis: execution owner unavailable during cancellation".to_string()
+                })?;
+                let (ack, halted) = std::sync::mpsc::sync_channel(1);
+                tx.send(motion_core::pump::PumpMsg::Halt {
+                    keys: all_axis_keys,
+                    ack,
+                })
+                .map_err(|_| "home_axis: execution owner closed during cancellation".to_string())?;
+                py.detach(move || halted.recv_timeout(Duration::from_secs(1)))
+                    .map_err(|_| {
+                        "home_axis: execution owner did not acknowledge cancellation halt"
+                            .to_string()
+                    })?;
+                tx.send(motion_core::pump::PumpMsg::DripDisarm(cohort))
+                    .map_err(|_| {
+                        "home_axis: execution owner closed before cancelling cohort".to_string()
+                    })?;
+                Ok(())
+            })();
+            if let Err(cancellation_error) = cancellation {
+                return Err(PyRuntimeError::new_err(format!(
+                    "{startup_error}; homing cancellation failed: {cancellation_error}"
+                )));
+            }
+            return Err(startup_error);
         }
-        startup?;
         Ok(())
     }
     fn motion_drained(&self) -> bool {
@@ -656,7 +681,6 @@ impl PyMotionEngine {
             router: Arc::clone(&self.router),
             motion_history: Arc::clone(&self.motion_history),
             mcu_axis_configs: Arc::clone(&self.mcu_axis_configs),
-            stepcompress_endpoints: Arc::clone(&self.stepcompress_endpoints),
             axis_transports: Arc::clone(&self.axis_transports.lock_ok()),
         }
     }

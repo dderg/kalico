@@ -22,15 +22,9 @@ const GRID_INDEX: u64 = 1_000;
 const GRID_CLOCK: u64 = 8_000_000_000;
 const SPAN_SECS: f64 = 0.010;
 const SPAN_NS: u64 = 10_000_000;
-/// Two of these overrun one fill window (256 cycles = 64 ms), so the tail of
-/// the pair stays staged after the first drain — a lane only ever holds the
-/// active view plus one successor, so depth comes from length, not count.
 const DEEP_SPAN_SECS: f64 = 0.040;
 const DEEP_SPAN_NS: u64 = 40_000_000;
 
-/// The fake endpoint: serves the kalico socket, answers every
-/// `PushSampleRuns` with the grid pair it is told to report, and keeps every
-/// lane run it accepted so the test can assert the stream the sink produced.
 struct RingEndpoint {
     received: Arc<Mutex<Vec<LaneRun>>>,
     grid_index: Arc<AtomicU32>,
@@ -69,33 +63,51 @@ impl RingEndpoint {
                 ready_tx.send(()).expect("endpoint readiness receiver");
                 while !stop.load(Ordering::Relaxed) {
                     for cmd in server.poll_commands() {
-                        if let Command::PushSampleRuns {
-                            correlation_id,
-                            msg,
-                        } = cmd
-                        {
-                            let lanes: Vec<(u8, u32)> = msg
-                                .lanes
-                                .iter()
-                                .map(|l| (l.axis_idx, free_cycles.load(Ordering::Relaxed)))
-                                .collect();
-                            let result = if reject.load(Ordering::Relaxed) {
-                                -318
-                            } else {
-                                received.lock_ok().extend(msg.lanes);
-                                0
-                            };
-                            if drop_response.load(Ordering::Relaxed) {
-                                continue;
-                            }
-                            let advance = u64::from(grid_index.load(Ordering::Relaxed));
-                            server.respond(&push_sample_runs_response_frame(
+                        match cmd {
+                            Command::PushSampleRuns {
                                 correlation_id,
-                                result,
-                                GRID_CLOCK,
-                                (GRID_INDEX + advance, GRID_CLOCK + advance * INTERVAL_NS),
-                                &lanes,
-                            ));
+                                msg,
+                            } => {
+                                let lanes: Vec<(u8, u32)> = msg
+                                    .lanes
+                                    .iter()
+                                    .map(|l| (l.axis_idx, free_cycles.load(Ordering::Relaxed)))
+                                    .collect();
+                                let result = if reject.load(Ordering::Relaxed) {
+                                    -318
+                                } else {
+                                    received.lock_ok().extend(msg.lanes);
+                                    0
+                                };
+                                if drop_response.load(Ordering::Relaxed) {
+                                    continue;
+                                }
+                                let advance = u64::from(grid_index.load(Ordering::Relaxed));
+                                server.respond(&push_sample_runs_response_frame(
+                                    correlation_id,
+                                    result,
+                                    GRID_CLOCK,
+                                    (GRID_INDEX + advance, GRID_CLOCK + advance * INTERVAL_NS),
+                                    &lanes,
+                                ));
+                            }
+                            Command::QuerySampleGrid { correlation_id } => {
+                                let advance = u64::from(grid_index.load(Ordering::Relaxed));
+                                server.respond(&ethercat_rt::wire::sample_grid_response_frame(
+                                    correlation_id,
+                                    ethercat_setpoint::setpoint::EXECUTOR_SETPOINT_RING,
+                                    INTERVAL_NS as u32,
+                                    1024,
+                                    (GRID_INDEX + advance, GRID_CLOCK + advance * INTERVAL_NS),
+                                ));
+                            }
+                            Command::SetFfLead { correlation_id, .. } => {
+                                server.respond(&ethercat_rt::wire::set_ff_lead_response_frame(
+                                    correlation_id,
+                                    0,
+                                ));
+                            }
+                            _ => {}
                         }
                     }
                     std::thread::sleep(Duration::from_millis(1));
@@ -406,6 +418,30 @@ fn grid_feedback_advances_the_filler_so_a_later_fill_lands_on_the_reported_grid(
         GRID_INDEX + u64::from(advance) + 16,
         "indices after the feedback are measured from the reported pair, not the claim pair"
     );
+}
+
+#[test]
+fn feedforward_reconfiguration_waits_for_actual_playback_not_the_cached_grid() {
+    let h = harness("configure-after-playback");
+    let start = GRID_CLOCK + INTERVAL_NS * 8;
+    h.sink
+        .send_mcu_frames(MCU_ID, &[frame(vec![linear_span(start, 0.0, 1.0)])])
+        .and_then(|()| h.sink.progress_mcu(MCU_ID, 0))
+        .expect("motion reaches the endpoint before configuration");
+    let command = || crate::pump::EndpointCommand::SetFfLead {
+        mcu_id: MCU_ID,
+        lead: mcu_protocol::messages::SetFfLead {
+            slot: 0,
+            lead_ns: 1_000_000,
+        },
+    };
+
+    assert!(h.sink.endpoint_control(command()).is_err());
+
+    h.endpoint.grid_index.store(100, Ordering::Relaxed);
+    h.sink
+        .endpoint_control(command())
+        .unwrap_or_else(|error| panic!("played motion must allow reconfiguration: {error}"));
 }
 
 #[test]

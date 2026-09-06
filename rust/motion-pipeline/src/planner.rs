@@ -1,4 +1,3 @@
-use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use geometry::path::lowering::PositionProfile;
 use geometry::path::{CurvatureProfile, Segment};
 use geometry::{Move, VelocityProfile, plan_velocity_stops_select_prefix};
@@ -38,52 +37,25 @@ impl Planner {
         }
     }
 
-    /// Reads only what planning needs: drains whatever the input already
-    /// holds, and the moment it would block with unplanned arrivals in the
-    /// window, plans and emits the committable prefix before waiting. Anything
-    /// beyond the window's own lookahead needs stays queued upstream, so a
-    /// full pipeline backpressures to the entry instead of pooling here.
-    pub fn run(mut self, input: Receiver<StreamInput>, output: Sender<PlannedItem>) {
-        loop {
-            let item = match input.try_recv() {
-                Ok(item) => item,
-                Err(TryRecvError::Disconnected) => break,
-                Err(TryRecvError::Empty) => {
-                    if !self.plan_on_quiet_input(&output) {
-                        return;
-                    }
-                    match input.recv() {
-                        Ok(item) => item,
-                        Err(_) => break,
-                    }
-                }
-            };
-            if !self.feed(item, &output) {
-                return;
-            }
-        }
-        self.finish(&output);
-    }
-
-    /// One iteration of [`Planner::run`]'s loop, for single-threaded hosts
-    /// that drive the stage item by item.
-    pub fn feed(&mut self, item: StreamInput, output: &Sender<PlannedItem>) -> bool {
+    pub fn feed(
+        &mut self,
+        item: StreamInput,
+        output: &mut impl FnMut(PlannedItem) -> bool,
+    ) -> bool {
         match item {
             StreamInput::Move(m) => self.absorb(m, output),
-            StreamInput::Drain => {
-                self.drain_to_rest(output) && output.send(PlannedItem::Drain).is_ok()
-            }
+            StreamInput::Drain => self.drain_to_rest(output) && output(PlannedItem::Drain),
             StreamInput::Control(ctrl) => self.forward_control(ctrl, output),
         }
     }
 
     /// The input-closed path: brake the window to rest, emit it, and forward
     /// the `Drain`.
-    pub fn finish(&mut self, output: &Sender<PlannedItem>) -> bool {
-        self.drain_to_rest(output) && output.send(PlannedItem::Drain).is_ok()
+    pub fn finish(&mut self, output: &mut impl FnMut(PlannedItem) -> bool) -> bool {
+        self.drain_to_rest(output) && output(PlannedItem::Drain)
     }
 
-    fn plan_on_quiet_input(&mut self, output: &Sender<PlannedItem>) -> bool {
+    pub fn idle(&mut self, output: &mut impl FnMut(PlannedItem) -> bool) -> bool {
         if self.moves_since_plan < QUIET_PLAN_MIN_MOVES {
             return true;
         }
@@ -95,7 +67,11 @@ impl Planner {
     /// sender gates the dispatcher); every other token requires the window to
     /// have been drained first, because it is meaningless (or hides a
     /// velocity discontinuity) while moves are still being looked ahead.
-    fn forward_control(&mut self, ctrl: Control, output: &Sender<PlannedItem>) -> bool {
+    fn forward_control(
+        &mut self,
+        ctrl: Control,
+        output: &mut impl FnMut(PlannedItem) -> bool,
+    ) -> bool {
         match &ctrl {
             Control::Reset { .. } => {
                 self.moves.clear();
@@ -115,10 +91,10 @@ impl Planner {
                 );
             }
         }
-        output.send(PlannedItem::Control(ctrl)).is_ok()
+        output(PlannedItem::Control(ctrl))
     }
 
-    fn absorb(&mut self, m: Move, output: &Sender<PlannedItem>) -> bool {
+    fn absorb(&mut self, m: Move, output: &mut impl FnMut(PlannedItem) -> bool) -> bool {
         self.moves.push(m);
         self.moves_since_plan += 1;
         if self.moves_since_plan < REPLAN_BATCH_MOVES
@@ -140,7 +116,7 @@ impl Planner {
                 buffered = self.moves.len(),
                 "[buffer-cap-drain] no committable seam — draining to rest"
             );
-            return self.drain_to_rest(output) && output.send(PlannedItem::Drain).is_ok();
+            return self.drain_to_rest(output) && output(PlannedItem::Drain);
         }
         true
     }
@@ -186,7 +162,7 @@ impl Planner {
 
     /// Materialize the brake-to-rest: plan the whole window to terminal rest
     /// and emit everything.
-    fn drain_to_rest(&mut self, output: &Sender<PlannedItem>) -> bool {
+    fn drain_to_rest(&mut self, output: &mut impl FnMut(PlannedItem) -> bool) -> bool {
         self.moves_since_plan = 0;
         if self.moves.is_empty() {
             return true;
@@ -198,7 +174,7 @@ impl Planner {
 
     /// Emit the prefix up to the furthest-forward clean seam that is inside
     /// the finality barrier and clear of the brake-to-rest setback.
-    fn emit_committable(&mut self, output: &Sender<PlannedItem>) -> bool {
+    fn emit_committable(&mut self, output: &mut impl FnMut(PlannedItem) -> bool) -> bool {
         let horizon = self.terminal_independent_seam();
         let profile = self.plan_selected(|barrier| {
             let mut chosen = 0usize;
@@ -257,15 +233,12 @@ impl Planner {
         &mut self,
         count: usize,
         profile: &VelocityProfile,
-        output: &Sender<PlannedItem>,
+        output: &mut impl FnMut(PlannedItem) -> bool,
     ) -> bool {
         debug_assert_eq!(profile.moves.len(), count);
         self.entry_v = profile.boundary_speeds[count];
         for (geometry, velocity) in self.moves.drain(..count).zip(profile.moves.iter().cloned()) {
-            if output
-                .send(PlannedItem::Move(PlannedMove { geometry, velocity }))
-                .is_err()
-            {
+            if !output(PlannedItem::Move(PlannedMove { geometry, velocity })) {
                 return false;
             }
         }

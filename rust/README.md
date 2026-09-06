@@ -13,10 +13,10 @@ does not reexport the coordinator or service layers.
 | Shared host/MCU contracts | `runtime-contract`: dependency-free `no_std` axis configuration, sample wire/codec, faults, and log catalogue |
 | Wire protocol and I/O | `mcu-protocol`, `mcu-transport`, `host-rt`: messages, transport, host clocks and device connections |
 | Execution accounting | `execution-credit`: dependency-free, allocation-free `no_std` acceptance, progress and interruption reconciliation; no queue or transport |
-| Numerical planning | `nurbs`, `geometry`, `trajectory`, `motion-pipeline`: geometry through continuous motion; no device endpoint |
+| Numerical planning | `nurbs`, `geometry`, `trajectory`, `motion-pipeline`: geometry through continuous motion, with one synchronous pipeline coordinator; no device endpoint |
 | Configuration | `config-doc`, `planner-config`, `config-py`: configuration documents, planner configuration, Python adapter |
 | Output kernels | `step-shim`: pulse compression and quantization; `ethercat-setpoint`: playback and feedforward; `ethercat-setpoint-fill`: host trajectory sampling and buzz generation |
-| Host coordination | `motion-core`: ingress, worker, pump, enqueue, homing and motion history |
+| Host coordination | `motion-core`: planning ingress and an execution owner for projection, admission and transport scheduling; homing and motion history |
 | Host services | `motion-services`: structured logging, remote triggers and servo services; independent of `motion-core` |
 | Host composition | `motion-engine`: Python binding and assembly of coordinator, services and endpoints |
 | Device execution | `runtime`: MCU motion execution; `c-api`: its staticlib and generated C ABI; `ethercat-rt`: EtherCAT endpoint |

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Sender;
 use nurbs::bezier::{BezierPiece, bezier_pieces_to_nurbs, extract_bezier_pieces};
 use trajectory::{
     AxisChainSet, ChainStage, CompiledChain, ContinuousAxis, ContinuousSegment,
@@ -203,44 +203,6 @@ impl Shaper {
         self
     }
 
-    pub fn run(mut self, input: Receiver<BaseItem>, output: Sender<TrajectoryItem>) {
-        let mut deferred = None;
-        loop {
-            let item = match deferred.take() {
-                Some(item) => item,
-                None => match input.recv() {
-                    Ok(item) => item,
-                    Err(_) => {
-                        self.finish(&output);
-                        return;
-                    }
-                },
-            };
-            let BaseItem::Seg(segment) = item else {
-                if !self.feed(item, &output) {
-                    return;
-                }
-                continue;
-            };
-            self.buffer_segment(segment);
-            for _ in 1..crate::STAGE_CHANNEL_CAP {
-                let Ok(item) = input.try_recv() else {
-                    break;
-                };
-                match item {
-                    BaseItem::Seg(segment) => self.buffer_segment(segment),
-                    other => {
-                        deferred = Some(other);
-                        break;
-                    }
-                }
-            }
-            if !self.emit(self.supported_count(), false, &output) {
-                return;
-            }
-        }
-    }
-
     fn buffer_segment(&mut self, item: BaseSegment) {
         let mut segment = item.segment;
         let started = crate::timing::stopwatch();
@@ -262,9 +224,11 @@ impl Shaper {
         self.pending.push(segment);
     }
 
-    /// One iteration of [`Shaper::run`]'s loop, for single-threaded hosts
-    /// that drive the stage item by item.
-    pub fn feed(&mut self, item: BaseItem, output: &Sender<TrajectoryItem>) -> bool {
+    pub fn feed(
+        &mut self,
+        item: BaseItem,
+        output: &mut impl FnMut(TrajectoryItem) -> bool,
+    ) -> bool {
         match item {
             BaseItem::Seg(item) => {
                 self.buffer_segment(item);
@@ -275,8 +239,7 @@ impl Shaper {
                     self.pending.is_empty() || self.pending.ends_at_rest(),
                     "shaper: drain marker arrived while the trajectory is not at rest"
                 );
-                self.emit(self.pending.len(), true, output)
-                    && output.send(TrajectoryItem::Parked).is_ok()
+                self.emit(self.pending.len(), true, output) && output(TrajectoryItem::Parked)
             }
             BaseItem::Control(ctrl) => {
                 match &ctrl {
@@ -322,14 +285,14 @@ impl Shaper {
                         }
                     }
                 }
-                output.send(TrajectoryItem::Control(ctrl)).is_ok()
+                output(TrajectoryItem::Control(ctrl))
             }
         }
     }
 
     /// The input-closed path: flush the buffered tail with the window clamped
     /// past the end of the signal.
-    pub fn finish(&mut self, output: &Sender<TrajectoryItem>) -> bool {
+    pub fn finish(&mut self, output: &mut impl FnMut(TrajectoryItem) -> bool) -> bool {
         self.emit(self.pending.len(), true, output)
     }
 
@@ -383,7 +346,12 @@ impl Shaper {
             .map(|seg| seg.t_end)
     }
 
-    fn emit(&mut self, count: usize, force: bool, output: &Sender<TrajectoryItem>) -> bool {
+    fn emit(
+        &mut self,
+        count: usize,
+        force: bool,
+        output: &mut impl FnMut(TrajectoryItem) -> bool,
+    ) -> bool {
         if count == 0 {
             return true;
         }
@@ -417,7 +385,7 @@ impl Shaper {
         )
         .unwrap_or_else(|e| panic!("shaper: {e}"));
         for seg in shaped {
-            if output.send(TrajectoryItem::Seg(seg)).is_err() {
+            if !output(TrajectoryItem::Seg(seg)) {
                 return false;
             }
         }

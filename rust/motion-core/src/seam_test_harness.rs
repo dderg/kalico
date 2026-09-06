@@ -14,7 +14,7 @@ use crate::pump::{
     JUNCTION_POSITION_FATAL_MM, JUNCTION_POSITION_LOG_MM, JunctionTracker, MAX_LEAD_SECS,
 };
 use crate::types::AxisKey;
-use motion_pipeline::{StreamConfig, TrajectoryItem, setup_stages};
+use motion_pipeline::{Pipeline, StreamConfig, TrajectoryItem};
 
 const HARNESS_MCU_ID: u32 = 0;
 const HARNESS_MCU_FREQ_HZ: f64 = 64.0e6;
@@ -378,7 +378,7 @@ pub fn collect_shaped_segments_scripted(
 /// the full streaming pipeline and return the shaped segments it emits.
 pub fn collect_shaped_segments_from_script(
     script: Vec<motion_pipeline::StreamInput>,
-    config: StreamConfig,
+    mut config: StreamConfig,
     chains: AxisChainSet,
 ) -> Vec<ContinuousSegment> {
     let spatial_home = script
@@ -390,25 +390,20 @@ pub fn collect_shaped_segments_from_script(
         .map_or([0.0, 0.0, 0.0], |seg| seg.point_at(0.0));
     let mut home = spatial_home.to_vec();
     home.push(0.0);
-    let handle = setup_stages(config, chains, home, 0.0);
-    let output = handle.output;
-    let collector = std::thread::spawn(move || {
-        let mut segs: Vec<ContinuousSegment> = Vec::new();
-        while let Ok(item) = output.recv() {
-            if let TrajectoryItem::Seg(seg) = item {
-                segs.push(seg);
-            }
+    config.corner.ramp_accel_budget_mm_s2 = config.max_extrude_only_accel_mm_s2;
+    let mut pipeline = Pipeline::new(config, chains, home, 0.0);
+    let mut segs = Vec::new();
+    let mut output = |item| {
+        if let TrajectoryItem::Seg(seg) = item {
+            segs.push(seg);
         }
-        segs
-    });
+        true
+    };
     for item in script {
-        handle
-            .input
-            .send(item)
-            .expect("pipeline input closed while feeding — a stage died");
+        assert!(pipeline.feed(item, &mut output));
     }
-    drop(handle.input);
-    collector.join().expect("pipeline collector panicked")
+    assert!(pipeline.finish(&mut output));
+    segs
 }
 
 #[cfg(test)]

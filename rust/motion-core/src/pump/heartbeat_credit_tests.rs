@@ -48,7 +48,7 @@ fn pump_with_pushed(pushed: u32) -> Pump<NullSink> {
         pending_barrier_acks: Vec::new(),
         release_plan: crate::pump::ReleasePlan::default(),
         data_open: true,
-        intake_batch_open: false,
+        fatal_reason: None,
         consumption_stall: super::stall::ConsumptionStallWatch::new(Duration::from_secs(60)),
         mem_probe: super::memstat::MemPressureProbe::new(),
     }

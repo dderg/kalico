@@ -252,6 +252,13 @@ impl WireSink {
 }
 
 impl SpanSink for WireSink {
+    fn endpoint_control(
+        &self,
+        command: super::EndpointCommand,
+    ) -> Result<super::EndpointReply, String> {
+        self.handle_endpoint_command(command)
+    }
+
     /// Single-axis convenience — the pump drives WireSink via `send_mcu_frames`;
     /// this exists only to satisfy the trait and routes through the same path.
     fn send_frame(

@@ -176,13 +176,13 @@ impl PyMotionEngine {
     /// [`AxisTransports`], not membership. Each endpoint also declares the
     /// depth its own buffer gives the lanes it owns — the pacing signal the
     /// pump's `room()` uses — so a dual lane carries one depth per transport.
-    fn build_pump_resources(
+    fn build_execution_resources(
         &self,
         mcu_configs: &[McuAxisConfig],
         host_ios: &HashMap<u32, Arc<McuHostIo>>,
         ec_conns: &HashMap<u32, Arc<McuSerialConn>>,
         pump_control: &crossbeam_channel::Sender<motion_core::pump::PumpMsg>,
-    ) -> PyResult<motion_core::worker::PumpResources> {
+    ) -> PyResult<motion_core::worker::ExecutionResources> {
         let router_for_clock = Arc::clone(&self.router);
         let clock_of: motion_core::pump::ClockSource = Arc::new(move |mcu_id: u32| {
             let r = router_for_clock.lock_ok();
@@ -288,9 +288,6 @@ impl PyMotionEngine {
                         [motion_core::axis_transport::TRANSPORT_PULSE as usize] = depth;
                 }
                 let shared = Arc::new(Mutex::new(endpoint));
-                self.stepcompress_endpoints
-                    .lock_ok()
-                    .insert(cfg.mcu_id, Arc::clone(&shared));
                 paced_step.push(Arc::clone(&shared));
                 stepcompress.insert(cfg.mcu_id, shared);
             }
@@ -328,9 +325,6 @@ impl PyMotionEngine {
                     mcu_retired.record(counts, clocks)
                 }));
                 let shared = Arc::new(Mutex::new(endpoint));
-                self.sample_endpoints
-                    .lock_ok()
-                    .insert(cfg.mcu_id, Arc::clone(&shared));
                 paced_sample.push(Arc::clone(&shared));
                 samples.insert(cfg.mcu_id, shared);
             }
@@ -352,12 +346,12 @@ impl PyMotionEngine {
         let drain_for_pump = self.drain.clone();
         let endpoint_death_for_pump = Arc::clone(&self.latched.endpoint_death);
         let transports_for_depth = Arc::clone(&transports);
-        Ok(motion_core::worker::PumpResources {
+        Ok(motion_core::worker::ExecutionResources {
             sink: motion_core::pump::WireSink {
                 stepcompress,
                 samples,
                 ethercat,
-                transports,
+                transports: Arc::clone(&transports),
                 timeout: Duration::from_secs(5),
             },
             callbacks: motion_core::pump::PumpCallbacks {
@@ -391,6 +385,11 @@ impl PyMotionEngine {
                 store: Arc::clone(&self.motion_history),
             },
             drain: drain_for_pump,
+            router: Arc::clone(&self.router),
+            anchor: Arc::clone(&self.dispatch_anchor),
+            mcu_configs: mcu_configs.to_vec(),
+            counter: Arc::clone(&self.dispatched_segments),
+            transports,
         })
     }
 
@@ -507,24 +506,9 @@ impl PyMotionEngine {
         host_ios: &HashMap<u32, Arc<McuHostIo>>,
         ec_conns: &HashMap<u32, Arc<McuSerialConn>>,
     ) -> PyResult<crossbeam_channel::Sender<motion_core::pump::PumpMsg>> {
-        let counter = Arc::clone(&self.dispatched_segments);
-        let router_arc = Arc::clone(&self.router);
-
         let (pump_tx, pump_rx) = crossbeam_channel::unbounded::<motion_core::pump::PumpMsg>();
-        let pump_resources =
-            self.build_pump_resources(mcu_configs, host_ios, ec_conns, &pump_tx)?;
-
-        let anchor_mutex = Arc::clone(&self.dispatch_anchor);
-        *anchor_mutex.lock_ok() = motion_core::anchor::Anchor::new();
-        let dispatch_resources = motion_core::worker::DispatchResources {
-            transports: Arc::clone(&self.axis_transports.lock_ok()),
-            router: Arc::clone(&router_arc),
-            anchor: anchor_mutex,
-            mcu_configs: mcu_configs.to_vec(),
-            counter: Arc::clone(&counter),
-            drip_active: Arc::clone(&self.homing.drip_active),
-            motion_history: Arc::clone(&self.motion_history),
-        };
+        let resources =
+            self.build_execution_resources(mcu_configs, host_ios, ec_conns, &pump_tx)?;
 
         let stream_cfg = build_stream_config(cfg)?;
         let axis_chains = cfg
@@ -542,8 +526,7 @@ impl PyMotionEngine {
             stream_cfg,
             axis_chains,
             home,
-            dispatch_resources,
-            pump_resources,
+            resources,
             (pump_tx, pump_rx),
         );
         let pump_control = pipeline.pump_control.clone();

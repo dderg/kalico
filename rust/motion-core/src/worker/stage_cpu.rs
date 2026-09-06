@@ -11,14 +11,7 @@ use super::CommittedFrontier;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const SAMPLE_PERIOD: Duration = Duration::from_secs(1);
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-const STAGE_PREFIXES: [&str; 6] = [
-    "kalico-fit",
-    "kalico-plan",
-    "kalico-lower",
-    "kalico-shape",
-    "kalico-dispat",
-    "push-pieces-pu",
-];
+const STAGE_PREFIXES: [&str; 2] = ["kalico-planning", "kalico-execut"];
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(super) fn parse_stat_comm_and_cpu_ticks(stat: &str) -> Result<(String, u64), String> {

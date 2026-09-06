@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
@@ -16,7 +16,6 @@ type HomingResult = Result<(geometry::MachinePos, geometry::MachinePos, u64), St
 pub(crate) struct HomingState {
     pub(super) lifecycle: Mutex<HomingLifecycle>,
     partial_ready: Condvar,
-    pub(crate) drip_active: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
@@ -55,7 +54,6 @@ impl HomingState {
         if let Some(error) = &state.failure {
             return Err(error.clone());
         }
-        self.drip_active.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -109,7 +107,6 @@ impl HomingState {
         state.pending_trips.clear();
         state.failure = None;
         state.consumer_cancelled = false;
-        self.drip_active.store(false, Ordering::Release);
     }
 
     pub(super) fn note_arm(&self, mcu: u32, endstop_id: u8, host_secs: f64) {
@@ -146,7 +143,7 @@ impl HomingState {
             return None;
         }
         state.failure.get_or_insert(error);
-        state.take_terminal(&self.drip_active, |_| true)
+        state.take_terminal(|_| true)
     }
 
     pub(super) fn abort(&self) -> Option<HomingRun> {
@@ -160,7 +157,7 @@ impl HomingState {
             HomingPhase::Registering(..) | HomingPhase::Active(_) | HomingPhase::Completing(..) => {
                 state.consumer_cancelled = true;
                 state.failure.get_or_insert_with(|| "homing aborted".into());
-                state.take_terminal(&self.drip_active, |_| true)
+                state.take_terminal(|_| true)
             }
         }
     }
@@ -216,7 +213,7 @@ impl HomingState {
             state.phase = HomingPhase::Idle;
         }
         if state.failure.is_some() {
-            state.take_terminal(&self.drip_active, |run| run.cohort == cohort)
+            state.take_terminal(|run| run.cohort == cohort)
         } else {
             None
         }
@@ -249,7 +246,6 @@ impl HomingLifecycle {
     }
     pub(super) fn take_terminal(
         &mut self,
-        drip_active: &AtomicBool,
         matches: impl FnOnce(&HomingRun) -> bool,
     ) -> Option<HomingRun> {
         let HomingPhase::Active(run) = &self.phase else {
@@ -265,14 +261,13 @@ impl HomingLifecycle {
         else {
             unreachable!()
         };
-        drip_active.store(false, Ordering::Release);
         Some(run)
     }
 }
 
 #[derive(Default)]
 pub(crate) struct FlushState {
-    pub(crate) pending_drain: Mutex<Option<crossbeam_channel::Receiver<()>>>,
+    pub(crate) pending_drain: Mutex<Option<crossbeam_channel::Receiver<Result<(), String>>>>,
     pub(crate) drain_wait_diag: Mutex<Option<super::drain_wait::DrainWaitDiag>>,
 }
 
