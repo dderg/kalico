@@ -10,13 +10,17 @@ fn armed(slot_mask: u8, sign_mask: u8, base_counts: [i32; MAX_BUZZ_SLOTS]) -> Bu
     let mut osc = BuzzOsc::new();
     let rc = osc.arm(
         8,
-        slot_mask,
-        sign_mask,
-        FS,
-        FE,
-        AMP_NM,
-        DUR_MS,
-        RAMP_MS,
+        BuzzRoute {
+            slot_mask,
+            sign_mask,
+        },
+        BuzzSweep {
+            freq_start_millihz: FS,
+            freq_end_millihz: FE,
+            amplitude_nm: AMP_NM,
+            duration_ms: DUR_MS,
+            ramp_ms: RAMP_MS,
+        },
         base_counts,
     );
     assert_eq!(rc, 0, "arm should succeed");
@@ -39,13 +43,17 @@ fn rejects_zero_slot_mask() {
     let mut osc = BuzzOsc::new();
     let rc = osc.arm(
         8,
-        0,
-        0,
-        FS,
-        FE,
-        AMP_NM,
-        DUR_MS,
-        RAMP_MS,
+        BuzzRoute {
+            slot_mask: 0,
+            sign_mask: 0,
+        },
+        BuzzSweep {
+            freq_start_millihz: FS,
+            freq_end_millihz: FE,
+            amplitude_nm: AMP_NM,
+            duration_ms: DUR_MS,
+            ramp_ms: RAMP_MS,
+        },
         [0; MAX_BUZZ_SLOTS],
     );
     assert!(!osc.active(), "zero mask must not arm");
@@ -57,13 +65,17 @@ fn rejects_slot_beyond_num_slots() {
     let mut osc = BuzzOsc::new();
     let rc = osc.arm(
         2,
-        0b100,
-        0,
-        FS,
-        FE,
-        AMP_NM,
-        DUR_MS,
-        RAMP_MS,
+        BuzzRoute {
+            slot_mask: 0b100,
+            sign_mask: 0,
+        },
+        BuzzSweep {
+            freq_start_millihz: FS,
+            freq_end_millihz: FE,
+            amplitude_nm: AMP_NM,
+            duration_ms: DUR_MS,
+            ramp_ms: RAMP_MS,
+        },
         [0; MAX_BUZZ_SLOTS],
     );
     assert!(!osc.active(), "slot 2 on a 2-slave node must not arm");

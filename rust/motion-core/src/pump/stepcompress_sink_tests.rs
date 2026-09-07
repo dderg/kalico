@@ -1,5 +1,5 @@
 use super::*;
-use crate::mcu_config::{LaneKind, McuAxisConfig};
+use crate::mcu_config::{LaneKind, McuAxisConfig, McuHardware};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64};
 use trajectory::{ClockedMotorSpan, ContinuousAxis, MotorGroup, MotorSpan, MotorTerm};
@@ -173,19 +173,21 @@ fn harness_axes(budget: u32, axes: Vec<usize>, oids: Vec<u32>) -> Harness {
         .map(|(&axis, &oid)| StepLaneConfig { axis, oid })
         .collect();
     let endpoint = StepcompressEndpoint::new(
-        MCU_ID,
-        StepShim::new(motors, SHIM_RING_DEPTH),
+        EndpointSpec {
+            mcu_id: MCU_ID,
+            shim: StepShim::new(motors, SHIM_RING_DEPTH),
+            egress,
+            pump_control: tx,
+            clock_of,
+            budget,
+            step_count_query: Arc::new(move |_| {
+                calls_for_query.fetch_add(1, Ordering::Relaxed);
+                Ok(query_for_endpoint.load(Ordering::Relaxed))
+            }),
+            link_health: None,
+            barrier_ack_deadline_secs: TELEPORTING_CLOCK_ACK_DEADLINE_SECONDS,
+        },
         &lanes,
-        egress,
-        tx,
-        clock_of,
-        budget,
-        Arc::new(move |_| {
-            calls_for_query.fetch_add(1, Ordering::Relaxed);
-            Ok(query_for_endpoint.load(Ordering::Relaxed))
-        }),
-        None,
-        TELEPORTING_CLOCK_ACK_DEADLINE_SECONDS,
     )
     .expect("one motor per axis builds a stepcompress endpoint");
     Harness {
@@ -1724,20 +1726,22 @@ fn stepcompress_cfg(move_queue_slots: u32) -> McuAxisConfig {
     McuAxisConfig {
         mcu_id: MCU_ID,
         axes: vec![0],
-        kinematics: 0,
-        max_motor_velocity: vec![100.0],
         ethercat: false,
         lane_kinds: vec![LaneKind::Pulse],
-        motor_counts: vec![1],
-        microstep_distance: vec![MICROSTEP],
-        invert_dir: vec![false],
-        stepper_oids: vec![OID],
-        move_queue_slots,
-        step_pulse_seconds: vec![2e-6],
         stepcompress_encoders: vec![StepcompressEncoder::Classic],
-        phase_sample_rate: 0.0,
-        phase_ring_depth: 0,
-        stepcompress_max_error_secs: 25e-6,
+        hw: McuHardware {
+            kinematics: 0,
+            max_motor_velocity: vec![100.0],
+            motor_counts: vec![1],
+            microstep_distance: vec![MICROSTEP],
+            invert_dir: vec![false],
+            stepper_oids: vec![OID],
+            step_pulse_seconds: vec![2e-6],
+            phase_sample_rate: 0.0,
+            phase_ring_depth: 0,
+            stepcompress_max_error_secs: 25e-6,
+            move_queue_slots,
+        },
     }
 }
 
@@ -1764,7 +1768,7 @@ fn classic_encoder_resolves_max_error_ticks_from_the_measured_clock() {
     let clock_of: ClockSource = Arc::new(|_| Some((0, CYCLES_PER_SECOND)));
     let mut cfg = stepcompress_cfg(128);
     cfg.stepcompress_encoders = vec![StepcompressEncoder::Classic];
-    cfg.stepcompress_max_error_secs = 10e-6;
+    cfg.hw.stepcompress_max_error_secs = 10e-6;
     build_endpoint(&cfg, Weak::new(), tx, CYCLES_PER_SECOND, clock_of)
         .expect("10us max_error at 1 MHz resolves to 10 ticks and must build");
 }
@@ -1775,7 +1779,7 @@ fn classic_encoder_with_a_sub_tick_max_error_is_a_build_error() {
     let clock_of: ClockSource = Arc::new(|_| Some((0, CYCLES_PER_SECOND)));
     let mut cfg = stepcompress_cfg(128);
     cfg.stepcompress_encoders = vec![StepcompressEncoder::Classic];
-    cfg.stepcompress_max_error_secs = 1e-7;
+    cfg.hw.stepcompress_max_error_secs = 1e-7;
     let err = match build_endpoint(&cfg, Weak::new(), tx, CYCLES_PER_SECOND, clock_of) {
         Err(e) => e,
         Ok(_) => panic!("a max_error below one tick must not build an endpoint"),
@@ -1789,7 +1793,7 @@ fn classic_encoder_with_an_overflowing_tick_budget_is_a_build_error() {
     let clock_of: ClockSource = Arc::new(|_| Some((0, CYCLES_PER_SECOND)));
     let mut cfg = stepcompress_cfg(128);
     cfg.stepcompress_encoders = vec![StepcompressEncoder::Classic];
-    cfg.stepcompress_max_error_secs = 1e6;
+    cfg.hw.stepcompress_max_error_secs = 1e6;
     let err = match build_endpoint(&cfg, Weak::new(), tx, CYCLES_PER_SECOND, clock_of) {
         Err(e) => e,
         Ok(_) => panic!("a max_error past the u32 tick budget must not build an endpoint"),
@@ -1803,7 +1807,7 @@ fn hp_encoder_builds_an_endpoint_without_a_max_error_budget() {
     let clock_of: ClockSource = Arc::new(|_| Some((0, CYCLES_PER_SECOND)));
     let mut cfg = stepcompress_cfg(128);
     cfg.stepcompress_encoders = vec![StepcompressEncoder::HighPrecision];
-    cfg.stepcompress_max_error_secs = 0.0;
+    cfg.hw.stepcompress_max_error_secs = 0.0;
     build_endpoint(&cfg, Weak::new(), tx, CYCLES_PER_SECOND, clock_of)
         .expect("hp ignores the max_error budget and must build");
 }
@@ -1817,13 +1821,13 @@ fn an_axis_split_across_two_motor_runs_is_a_build_error() {
     let clock_of: ClockSource = Arc::new(|_| Some((0, CYCLES_PER_SECOND)));
     let mut cfg = stepcompress_cfg(128);
     cfg.axes = vec![0, 1, 0];
-    cfg.max_motor_velocity = vec![100.0; 3];
+    cfg.hw.max_motor_velocity = vec![100.0; 3];
     cfg.lane_kinds = vec![LaneKind::Pulse; 3];
-    cfg.motor_counts = vec![1; 3];
-    cfg.microstep_distance = vec![MICROSTEP; 3];
-    cfg.invert_dir = vec![false; 3];
-    cfg.stepper_oids = vec![OID, OID + 1, OID + 2];
-    cfg.step_pulse_seconds = vec![2e-6; 3];
+    cfg.hw.motor_counts = vec![1; 3];
+    cfg.hw.microstep_distance = vec![MICROSTEP; 3];
+    cfg.hw.invert_dir = vec![false; 3];
+    cfg.hw.stepper_oids = vec![OID, OID + 1, OID + 2];
+    cfg.hw.step_pulse_seconds = vec![2e-6; 3];
     cfg.stepcompress_encoders = vec![StepcompressEncoder::Classic; 3];
     let err = match build_endpoint(&cfg, Weak::new(), tx, CYCLES_PER_SECOND, clock_of) {
         Err(e) => e,
@@ -1837,11 +1841,11 @@ fn one_endpoint_can_mix_classic_and_high_precision_motors() {
     let (tx, _rx) = crossbeam_channel::unbounded();
     let clock_of: ClockSource = Arc::new(|_| Some((0, CYCLES_PER_SECOND)));
     let mut cfg = stepcompress_cfg(128);
-    cfg.motor_counts = vec![2];
-    cfg.microstep_distance = vec![0.01; 2];
-    cfg.invert_dir = vec![false; 2];
-    cfg.stepper_oids = vec![OID, OID + 1];
-    cfg.step_pulse_seconds = vec![2e-6; 2];
+    cfg.hw.motor_counts = vec![2];
+    cfg.hw.microstep_distance = vec![0.01; 2];
+    cfg.hw.invert_dir = vec![false; 2];
+    cfg.hw.stepper_oids = vec![OID, OID + 1];
+    cfg.hw.step_pulse_seconds = vec![2e-6; 2];
     cfg.stepcompress_encoders = vec![
         StepcompressEncoder::Classic,
         StepcompressEncoder::HighPrecision,
@@ -3141,19 +3145,21 @@ fn h7_harness(oids: Vec<u32>) -> Harness {
         .map(|(&axis, &oid)| StepLaneConfig { axis, oid })
         .collect();
     let endpoint = StepcompressEndpoint::new(
-        MCU_ID,
-        StepShim::new(motors, SHIM_RING_DEPTH),
+        EndpointSpec {
+            mcu_id: MCU_ID,
+            shim: StepShim::new(motors, SHIM_RING_DEPTH),
+            egress,
+            pump_control: tx,
+            clock_of,
+            budget: 1024,
+            step_count_query: Arc::new(move |_| {
+                calls_for_query.fetch_add(1, Ordering::Relaxed);
+                Ok(query_for_endpoint.load(Ordering::Relaxed))
+            }),
+            link_health: None,
+            barrier_ack_deadline_secs: TELEPORTING_CLOCK_ACK_DEADLINE_SECONDS,
+        },
         &lanes,
-        egress,
-        tx,
-        clock_of,
-        1024,
-        Arc::new(move |_| {
-            calls_for_query.fetch_add(1, Ordering::Relaxed);
-            Ok(query_for_endpoint.load(Ordering::Relaxed))
-        }),
-        None,
-        TELEPORTING_CLOCK_ACK_DEADLINE_SECONDS,
     )
     .expect("three motors on one axis build a stepcompress endpoint");
     Harness {

@@ -2,15 +2,14 @@ use std::sync::Arc;
 
 use geometry::path::lowering::PositionProfile;
 use geometry::{Move, SurfaceTransform};
-use trajectory::{AnalyticMoveSpan, AxisChainSet, ContinuousAxis, ContinuousSegment, SurfaceMode};
+use trajectory::{AnalyticMoveSpan, ContinuousAxis, ContinuousSegment, RestSupport, SurfaceMode};
 
-use crate::types::{BaseItem, BaseSegment, Control, PlannedItem, PlannedMove};
+use crate::types::{BaseItem, Control, PlannedItem, PlannedMove, advance_odometer};
 
 const REST_EPS_MM_S: f64 = 1e-9;
 const WARP_BBOX_SAMPLES: usize = 8;
-
 pub struct Lowerer {
-    axis_chains: AxisChainSet,
+    rest: RestSupport,
     odometer: Vec<f64>,
     t: f64,
     rest_hold_pending: bool,
@@ -19,9 +18,9 @@ pub struct Lowerer {
 }
 
 impl Lowerer {
-    pub fn new(axis_chains: AxisChainSet, home_pos: Vec<f64>, t_start: f64) -> Self {
+    pub fn new(rest: RestSupport, home_pos: Vec<f64>, t_start: f64) -> Self {
         Self {
-            axis_chains,
+            rest,
             odometer: home_pos,
             t: t_start,
             rest_hold_pending: true,
@@ -53,14 +52,15 @@ impl Lowerer {
                         self.has_motion_history = false;
                     }
                     Control::SetAxisChains(chains) => {
-                        let settle = self.axis_chains.back_support().max(chains.back_support());
+                        let next = chains.rest_support();
+                        let settle = self.rest.after_motion.max(next.after_motion);
                         if self.has_motion_history
                             && settle > 0.0
                             && !self.emit_hold(self.t + settle, 0, output)
                         {
                             return false;
                         }
-                        self.axis_chains = chains.clone();
+                        self.rest = next;
                     }
                     Control::SetMesh {
                         mesh,
@@ -71,7 +71,7 @@ impl Lowerer {
                             *z = *gcode_z_rebase;
                         }
                     }
-                    Control::Nudge { .. } | Control::Barrier(_) => {}
+                    Control::Dispatch(_) => {}
                 }
                 return output(BaseItem::Control(control));
             }
@@ -85,7 +85,7 @@ impl Lowerer {
         output: &mut impl FnMut(BaseItem) -> bool,
     ) -> bool {
         let hold_pad = if self.rest_hold_pending {
-            self.axis_chains.forward_support()
+            self.rest.before_motion
         } else {
             0.0
         };
@@ -173,11 +173,11 @@ impl Lowerer {
         self.t = t_end;
         self.has_motion_history = true;
         advance_odometer(&mut self.odometer, &span.source);
-        output(BaseItem::Seg(BaseSegment { segment }))
+        output(BaseItem::Seg(segment))
     }
 
     fn emit_settle_hold(&mut self, output: &mut impl FnMut(BaseItem) -> bool) -> bool {
-        let settle = self.axis_chains.back_support();
+        let settle = self.rest.after_motion;
         if self.rest_hold_pending || !self.has_motion_history || settle <= 0.0 {
             return true;
         }
@@ -209,7 +209,7 @@ impl Lowerer {
             source_line,
             rest_at_end: true,
         };
-        if !output(BaseItem::Seg(BaseSegment { segment })) {
+        if !output(BaseItem::Seg(segment)) {
             return false;
         }
         self.t = t_end;
@@ -271,26 +271,4 @@ fn rest_z_warp(mesh: Option<&SurfaceTransform>, odometer: &[f64]) -> f64 {
             odometer.get(2).copied().unwrap_or(0.0),
         )
     })
-}
-
-pub fn dist3(a: [f64; 3], b: [f64; 3]) -> f64 {
-    let dx = a[0] - b[0];
-    let dy = a[1] - b[1];
-    let dz = a[2] - b[2];
-    (dx * dx + dy * dy + dz * dz).sqrt()
-}
-
-pub fn advance_odometer(pos: &mut [f64], movement: &Move) {
-    let length = movement.segment.s_len();
-    if let Some(segment) = &movement.segment.spatial {
-        let end = segment.point_at(length);
-        for axis in 0..3.min(pos.len()) {
-            pos[axis] = end[axis];
-        }
-    }
-    for follower in &movement.segment.followers {
-        if let Some(slot) = pos.get_mut(follower.axis_index) {
-            *slot += follower.delta_over(length);
-        }
-    }
 }

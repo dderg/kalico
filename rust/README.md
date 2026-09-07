@@ -30,6 +30,23 @@ as dev-dependencies without introducing those edges into production builds.
 MCU mutable state stays in `runtime` and the C-owned storage boundary, not in
 `runtime-contract`. See the [C/Rust boundary](../docs/rewrite/mcu-c-rust-boundary.md).
 
+### Contract gates
+
+The public surface of the numerical planning crates (`geometry`, `trajectory`,
+`motion-pipeline`) and `planner-config` is pinned in `api/<crate>.txt` and
+checked by `../scripts/public-api.sh` (part of `ci.sh quick`). Changing a
+contract means committing the reviewed baseline diff alongside the code:
+`../scripts/public-api.sh --update`. Positional parameter sprawl is rejected at
+compile time — `clippy::too_many_arguments` is `deny` workspace-wide, so an
+eighth parameter becomes a named request struct, not another argument.
+
+Inside `motion-pipeline` the stages (fit → plan → lower → shape) share one
+`feed(item, &mut impl FnMut(Out) -> bool) -> bool` shape and communicate only
+through the item enums in `types.rs`. Dispatcher-only tokens travel opaquely
+as `Control::Dispatch(DispatchCommand)`; the lowerer sizes its rest-holds from
+`AxisChainSet::rest_support()` rather than the chain set itself; the seam-stop
+rule the planner and fitter agree on is the single `geometry::seam_requires_stop`.
+
 ## Build
 
 Host (default — for tests, linting, host-side use):

@@ -1,7 +1,6 @@
 use super::pipeline_setup::{
     build_stream_config, report_ethercat_credit, require_unlimited_config_jerk,
 };
-use super::{PyMotionEngine, planner_api::require_supported_jerk_override};
 use motion_core::lock_ext::LockExt;
 use planner_config::PlannerConfig;
 
@@ -101,55 +100,4 @@ fn stream_config_rejects_finite_jerk() {
         )
     );
     assert!(build_stream_config(&cfg).is_err());
-}
-
-#[test]
-fn jerk_override_accepts_none_and_positive_infinity() {
-    let engine = PyMotionEngine::new();
-
-    engine.set_jerk_override(Some(f64::INFINITY)).unwrap();
-    assert_eq!(
-        engine.planner_config.lock_ok().runtime_caps.jerk_override,
-        Some(f64::INFINITY)
-    );
-
-    engine.set_jerk_override(None).unwrap();
-    assert_eq!(
-        engine.planner_config.lock_ok().runtime_caps.jerk_override,
-        None
-    );
-}
-
-#[test]
-fn jerk_override_rejects_every_finite_value() {
-    let engine = PyMotionEngine::new();
-
-    for jerk in [0.0, 1.0, -1.0] {
-        assert_eq!(
-            require_supported_jerk_override(Some(jerk)),
-            Err("finite jerk overrides are not supported by the continuous trajectory pipeline")
-        );
-        assert!(engine.set_jerk_override(Some(jerk)).is_err());
-        assert_eq!(
-            engine.planner_config.lock_ok().runtime_caps.jerk_override,
-            None
-        );
-    }
-}
-
-#[test]
-fn jerk_override_rejects_other_non_finite_values() {
-    let engine = PyMotionEngine::new();
-
-    for jerk in [f64::NEG_INFINITY, f64::NAN] {
-        assert_eq!(
-            require_supported_jerk_override(Some(jerk)),
-            Err("jerk override must be positive infinity or None")
-        );
-        assert!(engine.set_jerk_override(Some(jerk)).is_err());
-        assert_eq!(
-            engine.planner_config.lock_ok().runtime_caps.jerk_override,
-            None
-        );
-    }
 }

@@ -244,10 +244,12 @@ impl PlanCase {
         plan_velocity_stops(
             &self.moves,
             &self.stop_before,
-            INTEGRATION_TOL,
-            EXTRUDE_ONLY_V,
-            EXTRUDE_ONLY_A,
-            self.entry,
+            geometry::VelocityPlanParams {
+                integration_tol: INTEGRATION_TOL,
+                max_extrude_only_velocity_mm_s: EXTRUDE_ONLY_V,
+                max_extrude_only_accel_mm_s2: EXTRUDE_ONLY_A,
+                entry_v: self.entry,
+            },
         )
     }
 }

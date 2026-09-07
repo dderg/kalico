@@ -228,7 +228,6 @@ impl PyMotionEngine {
     #[pyo3(signature = (mcu, freq, offset, last_clock, converged, host_now_raw))]
     fn set_clock_est(
         &self,
-        _py: Python<'_>,
         mcu: u32,
         freq: f64,
         offset: f64,

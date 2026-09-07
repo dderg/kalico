@@ -228,8 +228,8 @@ class FakeEngine:
             "sdo_write", handle, slot, index, subindex, size, value
         )
 
-    def set_strain_comp(self, handle, slot_a, slot_b, *args):
-        return self._call("set_strain_comp", handle, slot_a, slot_b, *args)
+    def set_strain_comp(self, handle, pair, grid):
+        return self._call("set_strain_comp", handle, pair, grid)
 
     def set_drive_limits(self, handle, drives):
         return self._call("set_drive_limits", handle, drives)
@@ -288,11 +288,15 @@ class FakeEngine:
     def submit_dwell(self, delay):
         return self._call("submit_dwell", delay)
 
-    def submit_nudge(
-        self, mcu_id, axis_idx, motor_mask, delta_mm, speed, accel
-    ):
+    def submit_nudge(self, target, motion):
         return self._call(
-            "submit_nudge", mcu_id, axis_idx, motor_mask, delta_mm, speed, accel
+            "submit_nudge",
+            target["mcu_id"],
+            target["axis_idx"],
+            target["motor_mask"],
+            motion["delta_mm"],
+            motion["speed"],
+            motion["accel"],
         )
 
 

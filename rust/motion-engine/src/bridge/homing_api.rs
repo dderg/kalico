@@ -74,7 +74,6 @@ fn next_homing_cohort() -> u64 {
 #[pymethods]
 impl PyMotionEngine {
     #[pyo3(signature = (axis, direction, speed_mm_s, max_travel_mm, endstops))]
-    #[allow(clippy::too_many_arguments)]
     fn home_axis_start(
         &self,
         py: Python<'_>,
@@ -378,7 +377,7 @@ impl PyMotionEngine {
         let kin_tag = configs
             .iter()
             .find(|c| c.axes.contains(&0usize))
-            .map(|c| c.kinematics)
+            .map(|c| c.hw.kinematics)
             .unwrap_or(motion_core::kinematics::KinematicsKind::Cartesian as u8);
         let kin = motion_core::kinematics::KinematicsModule::from_tag(kin_tag)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;

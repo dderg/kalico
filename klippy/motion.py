@@ -222,7 +222,12 @@ class Motion:
     def submit_nudge(self, mcu_id, axis_idx, motor_idx, delta_mm, speed, accel):
         motor_mask = 1 << motor_idx
         return self.engine.submit_nudge(
-            mcu_id, axis_idx, motor_mask, delta_mm, speed, accel
+            {
+                "mcu_id": mcu_id,
+                "axis_idx": axis_idx,
+                "motor_mask": motor_mask,
+            },
+            {"delta_mm": delta_mm, "speed": speed, "accel": accel},
         )
 
     def submit_resonance_buzz(self, axis_mask, sign_mask, wave):

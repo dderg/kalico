@@ -138,20 +138,20 @@ pub fn build_endpoint(
             cfg.mcu_id
         ));
     }
-    if cfg.move_queue_slots <= MOVE_SLOT_RESERVE {
+    if cfg.hw.move_queue_slots <= MOVE_SLOT_RESERVE {
         return Err(format!(
             "stepcompress mcu {}: mcu advertised {} move-queue slots, which leaves nothing \
              after the {MOVE_SLOT_RESERVE}-slot reserve for klippy's own scheduled commands",
-            cfg.mcu_id, cfg.move_queue_slots
+            cfg.mcu_id, cfg.hw.move_queue_slots
         ));
     }
-    let budget = cfg.move_queue_slots - MOVE_SLOT_RESERVE;
+    let budget = cfg.hw.move_queue_slots - MOVE_SLOT_RESERVE;
     let cycles_per_second = measured_clock_freq;
     let classic_encoder = if cfg
         .stepcompress_encoders
         .contains(&StepcompressEncoder::Classic)
     {
-        let max_error_ticks = (cfg.stepcompress_max_error_secs * measured_clock_freq).round();
+        let max_error_ticks = (cfg.hw.stepcompress_max_error_secs * measured_clock_freq).round();
         if !max_error_ticks.is_finite()
             || max_error_ticks < 1.0
             || max_error_ticks > u32::MAX as f64
@@ -160,7 +160,7 @@ pub fn build_endpoint(
                 "stepcompress mcu {}: classic encoder max_error {} s at \
                  {measured_clock_freq} Hz does not resolve to a tick budget in [1, {}]",
                 cfg.mcu_id,
-                cfg.stepcompress_max_error_secs,
+                cfg.hw.stepcompress_max_error_secs,
                 u32::MAX
             ));
         }
@@ -171,6 +171,7 @@ pub fn build_endpoint(
         None
     };
     let motor_count: usize = cfg
+        .hw
         .motor_counts
         .iter()
         .map(|&count| usize::from(count))
@@ -183,7 +184,7 @@ pub fn build_endpoint(
         }
         let velocity_ceiling = cfg.motor_velocity_ceiling(axis);
         for motor in cfg.motor_range(lane) {
-            let microstep_distance = cfg.microstep_distance[motor];
+            let microstep_distance = cfg.hw.microstep_distance[motor];
             let steps_per_second = velocity_ceiling / microstep_distance;
             if steps_per_second >= cycles_per_second {
                 return Err(format!(
@@ -193,7 +194,7 @@ pub fn build_endpoint(
                     cfg.mcu_id
                 ));
             }
-            let step_pulse_seconds = cfg.step_pulse_seconds[motor];
+            let step_pulse_seconds = cfg.hw.step_pulse_seconds[motor];
             if !step_pulse_seconds.is_finite() || step_pulse_seconds < 0.0 {
                 return Err(format!(
                     "stepcompress mcu {} axis {axis} motor {motor}: step pulse width \
@@ -202,9 +203,9 @@ pub fn build_endpoint(
                 ));
             }
             motors.push(MotorConfig {
-                oid: cfg.stepper_oids[motor],
+                oid: cfg.hw.stepper_oids[motor],
                 microstep_distance,
-                invert_dir: cfg.invert_dir[motor],
+                invert_dir: cfg.hw.invert_dir[motor],
                 cycles_per_second,
                 min_rearm_cycles: STEP_REARM_PULSES
                     * (step_pulse_seconds * cycles_per_second) as u64,
@@ -217,7 +218,7 @@ pub fn build_endpoint(
             });
             pulse_lanes.push(StepLaneConfig {
                 axis,
-                oid: cfg.stepper_oids[motor],
+                oid: cfg.hw.stepper_oids[motor],
             });
         }
     }
@@ -232,20 +233,22 @@ pub fn build_endpoint(
     let query = host_io_step_count_query(cfg.mcu_id, host_io.clone());
     let link_health = host_io.upgrade().map(|io| io.link_health());
     let mut endpoint = StepcompressEndpoint::new(
-        cfg.mcu_id,
-        StepShim::new(motors, SHIM_RING_DEPTH),
-        &pulse_lanes,
-        host_io_egress(cfg.mcu_id, host_io),
-        pump_control,
-        clock_of,
-        budget,
-        query,
-        link_health,
-        if simulated {
-            SIM_BARRIER_ACK_DEADLINE_SECONDS
-        } else {
-            BARRIER_ACK_DEADLINE_SECONDS
+        EndpointSpec {
+            mcu_id: cfg.mcu_id,
+            shim: StepShim::new(motors, SHIM_RING_DEPTH),
+            egress: host_io_egress(cfg.mcu_id, host_io),
+            pump_control,
+            clock_of,
+            budget,
+            step_count_query: query,
+            link_health,
+            barrier_ack_deadline_secs: if simulated {
+                SIM_BARRIER_ACK_DEADLINE_SECONDS
+            } else {
+                BARRIER_ACK_DEADLINE_SECONDS
+            },
         },
+        &pulse_lanes,
     )?;
     if !simulated {
         endpoint.set_drain_pass_budget(DRAIN_PASS_BUDGET);
@@ -606,19 +609,34 @@ enum FrameClock {
     HeadsTheNextRun { dir: u8 },
 }
 
+/// Everything a [`StepcompressEndpoint`] needs that is not derived from its
+/// lanes: the mcu it speaks for, the shim it drains, and the wire, clock and
+/// control handles it drives them through.
+pub struct EndpointSpec {
+    pub mcu_id: u32,
+    pub shim: StepShim,
+    pub egress: FrameEgress,
+    pub pump_control: Sender<PumpMsg>,
+    pub clock_of: ClockSource,
+    pub budget: u32,
+    pub step_count_query: StepCountQuery,
+    pub link_health: Option<Arc<host_rt::host_io::link_health::LinkHealth>>,
+    pub barrier_ack_deadline_secs: f64,
+}
+
 impl StepcompressEndpoint {
-    pub fn new(
-        mcu_id: u32,
-        shim: StepShim,
-        lanes: &[StepLaneConfig],
-        egress: FrameEgress,
-        pump_control: Sender<PumpMsg>,
-        clock_of: ClockSource,
-        budget: u32,
-        step_count_query: StepCountQuery,
-        link_health: Option<Arc<host_rt::host_io::link_health::LinkHealth>>,
-        barrier_ack_deadline_secs: f64,
-    ) -> Result<Self, String> {
+    pub fn new(spec: EndpointSpec, lanes: &[StepLaneConfig]) -> Result<Self, String> {
+        let EndpointSpec {
+            mcu_id,
+            shim,
+            egress,
+            pump_control,
+            clock_of,
+            budget,
+            step_count_query,
+            link_health,
+            barrier_ack_deadline_secs,
+        } = spec;
         let published = shim.consumed_counts();
         let mut axis_runs: Vec<(usize, Range<usize>)> = Vec::new();
         let mut first = 0;

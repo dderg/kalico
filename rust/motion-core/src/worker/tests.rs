@@ -5,7 +5,7 @@ use super::dispatch::SegmentSink;
 use super::*;
 use geometry::segment::SourceRange;
 use geometry::{CornerFitConfig, MoveContext, VelocityLimits, line_move};
-use motion_pipeline::StreamConfig;
+use motion_pipeline::{Control, DispatchCommand, StreamConfig};
 use trajectory::{ContinuousSegment, NudgeProfile};
 
 #[derive(Clone, Default)]
@@ -224,8 +224,8 @@ fn finite_homing_admission_and_cancellation_preserve_backpressure() {
     output.send(TrajectoryItem::Parked).unwrap();
     let (reply, barrier) = crossbeam_channel::bounded(1);
     output
-        .send(TrajectoryItem::Control(motion_pipeline::Control::Barrier(
-            reply,
+        .send(TrajectoryItem::Control(Control::Dispatch(
+            DispatchCommand::Barrier(reply),
         )))
         .unwrap();
     let ack = barrier
@@ -238,17 +238,19 @@ fn finite_homing_admission_and_cancellation_preserve_backpressure() {
         "admission must not pretend the endpoint played the backlog"
     );
     output
-        .send(TrajectoryItem::Control(motion_pipeline::Control::Nudge {
-            mcu_id: key.mcu_id,
-            axis: key.axis,
-            motor_mask: 0,
-            profile: crate::nudge::plan_nudge_profile(0, 1.0, 1.0, 1.0, 0.0).unwrap(),
-        }))
+        .send(TrajectoryItem::Control(Control::Dispatch(
+            DispatchCommand::Nudge {
+                mcu_id: key.mcu_id,
+                axis: key.axis,
+                motor_mask: 0,
+                profile: crate::nudge::plan_nudge_profile(0, 1.0, 1.0, 1.0, 0.0).unwrap(),
+            },
+        )))
         .unwrap();
     let (reply, after_motion) = crossbeam_channel::bounded(1);
     output
-        .send(TrajectoryItem::Control(motion_pipeline::Control::Barrier(
-            reply,
+        .send(TrajectoryItem::Control(Control::Dispatch(
+            DispatchCommand::Barrier(reply),
         )))
         .unwrap();
     let (inspected, inspection) = std::sync::mpsc::sync_channel(1);
@@ -265,14 +267,14 @@ fn finite_homing_admission_and_cancellation_preserve_backpressure() {
     );
     links.discard.store(true, Ordering::Release);
     output
-        .send(TrajectoryItem::Control(motion_pipeline::Control::Reset {
+        .send(TrajectoryItem::Control(Control::Reset {
             pos: vec![0.0; 3],
         }))
         .unwrap();
     let (reply, reset) = crossbeam_channel::bounded(1);
     output
-        .send(TrajectoryItem::Control(motion_pipeline::Control::Barrier(
-            reply,
+        .send(TrajectoryItem::Control(Control::Dispatch(
+            DispatchCommand::Barrier(reply),
         )))
         .unwrap();
     assert!(
@@ -1250,8 +1252,11 @@ fn beacon_scan_path_live_worker_velocity_stays_bounded() {
                 ethercat: false,
                 mcu_id: 0,
                 axes: vec![0, 1, 2],
-                kinematics: crate::mcu_config::KINEMATICS_COREXY,
-                max_motor_velocity: vec![2083.3, 2083.3, 208.3],
+                hw: crate::mcu_config::McuHardware {
+                    kinematics: crate::mcu_config::KINEMATICS_COREXY,
+                    max_motor_velocity: vec![2083.3, 2083.3, 208.3],
+                    ..Default::default()
+                },
                 ..Default::default()
             }];
             let enqueued = crate::enqueue::enqueue_segment(

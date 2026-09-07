@@ -649,7 +649,7 @@ mod corexy_reconstruction_tests {
     use super::{FREQ, make_linear_move, record_synced, router_with_clock, shared};
     use crate::homing::{final_cartesian_position, reconstruct_cartesian_position};
     use crate::kinematics::KinematicsKind;
-    use crate::mcu_config::{AXIS_X, AXIS_Y, AXIS_Z, McuAxisConfig};
+    use crate::mcu_config::{AXIS_X, AXIS_Y, AXIS_Z, McuAxisConfig, McuHardware};
     use crate::motion_history::HistoryStore;
     use crate::types::AxisKey;
 
@@ -657,9 +657,12 @@ mod corexy_reconstruction_tests {
         McuAxisConfig {
             mcu_id,
             axes: vec![AXIS_X, AXIS_Y],
-            kinematics: KinematicsKind::CoreXy as u8,
-            max_motor_velocity: Vec::new(),
             ethercat: false,
+            hw: McuHardware {
+                kinematics: KinematicsKind::CoreXy as u8,
+                max_motor_velocity: Vec::new(),
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
@@ -668,9 +671,12 @@ mod corexy_reconstruction_tests {
         McuAxisConfig {
             mcu_id,
             axes: vec![AXIS_Z],
-            kinematics: KinematicsKind::CoreXy as u8,
-            max_motor_velocity: Vec::new(),
             ethercat: false,
+            hw: McuHardware {
+                kinematics: KinematicsKind::CoreXy as u8,
+                max_motor_velocity: Vec::new(),
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
@@ -883,7 +889,9 @@ mod stepcompress_reconcile_tests {
         reconcile_stepcompress_lanes, stepcompress_lane,
     };
     use crate::kinematics::KinematicsKind;
-    use crate::mcu_config::{AXIS_X, AXIS_Y, AXIS_Z, LaneKind, McuAxisConfig, StepcompressEncoder};
+    use crate::mcu_config::{
+        AXIS_X, AXIS_Y, AXIS_Z, LaneKind, McuAxisConfig, McuHardware, StepcompressEncoder,
+    };
     use crate::types::AxisKey;
     use std::cell::RefCell;
 
@@ -894,20 +902,22 @@ mod stepcompress_reconcile_tests {
         McuAxisConfig {
             mcu_id: MCU_ID,
             axes: vec![AXIS_X, AXIS_Y],
-            kinematics: KinematicsKind::CoreXy as u8,
-            max_motor_velocity: Vec::new(),
             ethercat: false,
             lane_kinds: vec![LaneKind::Pulse; 2],
-            motor_counts: vec![1; 2],
-            microstep_distance: vec![MICROSTEP, MICROSTEP],
-            invert_dir: vec![false, true],
-            stepper_oids: vec![11, 12],
-            move_queue_slots: 128,
-            step_pulse_seconds: vec![2e-6, 2e-6],
             stepcompress_encoders: vec![StepcompressEncoder::HighPrecision; 2],
-            phase_sample_rate: 0.0,
-            phase_ring_depth: 0,
-            stepcompress_max_error_secs: 0.0,
+            hw: McuHardware {
+                kinematics: KinematicsKind::CoreXy as u8,
+                max_motor_velocity: Vec::new(),
+                motor_counts: vec![1; 2],
+                microstep_distance: vec![MICROSTEP, MICROSTEP],
+                invert_dir: vec![false, true],
+                stepper_oids: vec![11, 12],
+                move_queue_slots: 128,
+                step_pulse_seconds: vec![2e-6, 2e-6],
+                phase_sample_rate: 0.0,
+                phase_ring_depth: 0,
+                stepcompress_max_error_secs: 0.0,
+            },
         }
     }
     fn pulse_z_cfg() -> McuAxisConfig {
@@ -915,10 +925,10 @@ mod stepcompress_reconcile_tests {
         config.mcu_id = 9;
         config.axes = vec![AXIS_Z];
         config.lane_kinds = vec![LaneKind::Pulse];
-        config.microstep_distance = vec![MICROSTEP];
-        config.invert_dir = vec![false];
-        config.stepper_oids = vec![14];
-        config.step_pulse_seconds = vec![2e-6];
+        config.hw.microstep_distance = vec![MICROSTEP];
+        config.hw.invert_dir = vec![false];
+        config.hw.stepper_oids = vec![14];
+        config.hw.step_pulse_seconds = vec![2e-6];
         config
     }
 
@@ -927,10 +937,10 @@ mod stepcompress_reconcile_tests {
         config.mcu_id = 10;
         config.axes = vec![3];
         config.lane_kinds = vec![LaneKind::Pulse];
-        config.microstep_distance = vec![0.001];
-        config.invert_dir = vec![false];
-        config.stepper_oids = vec![13];
-        config.step_pulse_seconds = vec![2e-6];
+        config.hw.microstep_distance = vec![0.001];
+        config.hw.invert_dir = vec![false];
+        config.hw.stepper_oids = vec![13];
+        config.hw.step_pulse_seconds = vec![2e-6];
         config
     }
 
@@ -1127,14 +1137,14 @@ mod stepcompress_reconcile_tests {
     #[test]
     fn grouped_lane_reconciliation_uses_history_and_reseeds_every_motor() {
         let mut grouped = cfg();
-        grouped.kinematics = KinematicsKind::Cartesian as u8;
-        grouped.motor_counts = vec![2, 1];
-        grouped.microstep_distance = vec![MICROSTEP; 3];
-        grouped.invert_dir = vec![false; 3];
-        grouped.stepper_oids = vec![11, 13, 12];
-        grouped.step_pulse_seconds = vec![2e-6; 3];
+        grouped.hw.kinematics = KinematicsKind::Cartesian as u8;
+        grouped.hw.motor_counts = vec![2, 1];
+        grouped.hw.microstep_distance = vec![MICROSTEP; 3];
+        grouped.hw.invert_dir = vec![false; 3];
+        grouped.hw.stepper_oids = vec![11, 13, 12];
+        grouped.hw.step_pulse_seconds = vec![2e-6; 3];
         let mut z = pulse_z_cfg();
-        z.kinematics = KinematicsKind::Cartesian as u8;
+        z.hw.kinematics = KinematicsKind::Cartesian as u8;
         let configs = vec![grouped, z];
         let reseeded = RefCell::new(Vec::new());
         let pos = reconcile_stepcompress_lanes(
@@ -1172,7 +1182,7 @@ mod stepcompress_reconcile_tests {
     #[test]
     fn missing_oid_for_a_stepcompress_lane_is_a_loud_error() {
         let mut broken = cfg();
-        broken.stepper_oids = vec![11];
+        broken.hw.stepper_oids = vec![11];
         let err =
             reconcile_stepcompress_axis(&broken, key(AXIS_Y), 0.0, &|_| Ok(0), &|_, _| Ok(()))
                 .unwrap_err();

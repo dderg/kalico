@@ -5,23 +5,21 @@ use trajectory::{AxisChainSet, ContinuousSegment};
 
 pub mod fit_stage;
 mod follower_projection;
-pub mod lower_stage;
-pub mod lowering;
+mod lower_stage;
+mod lowering;
 pub mod planner;
-pub mod shaper;
+mod shaper;
 pub mod timing;
 pub mod types;
 
-use fit_stage::FitStage;
+use fit_stage::{FitDriver, FitStage};
 use planner::Planner;
+use shaper::Shaper;
 
-pub use fit_stage::FitDriver;
-pub use lower_stage::{Lowerer, advance_odometer, dist3};
-pub use lowering::FitTol;
-pub use shaper::Shaper;
+pub use lower_stage::Lowerer;
 pub use types::{
-    BarrierAck, BaseItem, BaseSegment, CONTIGUITY_EPS_MM, Control, PlannedItem, StreamConfig,
-    StreamError, StreamInput, TrajectoryItem,
+    BarrierAck, BaseItem, CONTIGUITY_EPS_MM, Control, DispatchCommand, PlannedItem, StreamConfig,
+    StreamError, StreamInput, TrajectoryItem, advance_odometer, dist3,
 };
 
 pub struct Pipeline {
@@ -42,14 +40,8 @@ impl Pipeline {
         Self {
             fit: FitStage::new(config.corner).into_driver(),
             planner: Planner::new(config),
-            lowerer: Lowerer::new(chains.clone(), home_pos, t_start),
-            shaper: Shaper::new(
-                chains,
-                FitTol {
-                    pos_mm: config.fit_tol_mm,
-                    accel_mm_s2: config.fit_tol_accel_mm_s2,
-                },
-            ),
+            lowerer: Lowerer::new(chains.rest_support(), home_pos, t_start),
+            shaper: Shaper::new(chains, config.fit_tol()),
             fitted_tap: None,
         }
     }

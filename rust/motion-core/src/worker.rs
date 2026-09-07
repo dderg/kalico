@@ -244,7 +244,7 @@ pub fn setup_pipeline(
 
 impl StreamWorkerHandle {
     fn spawn(
-        mut config: StreamConfig,
+        config: StreamConfig,
         axis_chains: AxisChainSet,
         home_pos: Vec<f64>,
         output: Sender<TrajectoryItem>,
@@ -253,7 +253,6 @@ impl StreamWorkerHandle {
         pump: Sender<crate::pump::PumpMsg>,
     ) -> Self {
         let (tx, rx) = bounded(INPUT_CHANNEL_CAP);
-        config.corner.ramp_accel_budget_mm_s2 = config.max_extrude_only_accel_mm_s2;
         let pipeline = Pipeline::new(config, axis_chains, home_pos.clone(), 0.0);
         let ingress = ingress::Ingress {
             config,

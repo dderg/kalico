@@ -6,11 +6,14 @@ const FOLLOWER_E: usize = 3;
 
 fn cfg(mcu_id: u32, axes: Vec<usize>) -> McuAxisConfig {
     McuAxisConfig {
-        max_motor_velocity: Vec::new(),
         mcu_id,
         axes,
-        kinematics: 1,
         ethercat: false,
+        hw: motion_core::mcu_config::McuHardware {
+            max_motor_velocity: Vec::new(),
+            kinematics: 1,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }

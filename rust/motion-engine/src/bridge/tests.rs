@@ -686,29 +686,31 @@ fn register_ethercat_mcu_seeds_nominal_clock_freq() {
 
     engine.register_ethercat_mcu(
         raw,
-        "servo",
-        "/tmp/test.sock",
-        child,
-        conn,
-        vec![0],
-        SampleGrid {
-            cycle_ticks: 250_000,
-            ring_depth_cycles: 512,
-            grid_index: 42,
-            grid_clock: 10_500_000,
+        super::EthercatRegistration {
+            label: "servo".into(),
+            socket_path: "/tmp/test.sock".into(),
+            child,
+            conn,
+            slot_axes: vec![0],
+            sample_grid: SampleGrid {
+                cycle_ticks: 250_000,
+                ring_depth_cycles: 512,
+                grid_index: 42,
+                grid_clock: 10_500_000,
+            },
+            ring_filler: std::sync::Arc::new(std::sync::Mutex::new(
+                ethercat_setpoint_fill::setpoint_fill::ChainFiller::new(
+                    &[ethercat_setpoint_fill::setpoint_fill::LaneSpec {
+                        axis: 0,
+                        cmd_counts_per_mm: 1_000.0,
+                        ff_lead_ns: 0,
+                    }],
+                    None,
+                    250_000,
+                    1,
+                ),
+            )),
         },
-        std::sync::Arc::new(std::sync::Mutex::new(
-            ethercat_setpoint_fill::setpoint_fill::ChainFiller::new(
-                &[ethercat_setpoint_fill::setpoint_fill::LaneSpec {
-                    axis: 0,
-                    cmd_counts_per_mm: 1_000.0,
-                    ff_lead_ns: 0,
-                }],
-                None,
-                250_000,
-                1,
-            ),
-        )),
     );
 
     assert!(

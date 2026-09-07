@@ -24,7 +24,7 @@ use std::sync::Arc;
 use mcu_protocol::messages::{LaneRun, SetpointSample, LANE_RUN_FLAG_REANCHOR, LANE_RUN_FLAG_TAIL};
 use trajectory::ClockedMotorSpan;
 
-use crate::buzz::{BuzzOsc, MAX_BUZZ_SLOTS};
+use crate::buzz::{BuzzOsc, BuzzRoute, BuzzSweep, MAX_BUZZ_SLOTS};
 use ethercat_setpoint::dynamics::DynamicsModel;
 use ethercat_setpoint::scale::mm_to_counts;
 use ethercat_setpoint::setpoint::MAX_FILL_CYCLES;
@@ -448,18 +448,8 @@ impl ChainFiller {
     /// queued: the sweep replaces the whole window, suppressing every
     /// undriven lane for its full duration, so an unrelated lane's queued
     /// motion would be swallowed instead of played.
-    #[allow(clippy::too_many_arguments, clippy::cast_possible_truncation)]
-    pub fn arm_buzz(
-        &mut self,
-        slot_mask: u8,
-        sign_mask: u8,
-        freq_start_millihz: u32,
-        freq_end_millihz: u32,
-        amplitude_nm: u32,
-        duration_ms: u32,
-        ramp_ms: u32,
-        start_clock_ns: u64,
-    ) -> i32 {
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn arm_buzz(&mut self, route: BuzzRoute, sweep: BuzzSweep, start_clock_ns: u64) -> i32 {
         if self.buzz.active() {
             return crate::buzz::ERR_BUZZ_BUSY;
         }
@@ -467,7 +457,7 @@ impl ChainFiller {
             return crate::buzz::ERR_BUZZ_STREAMING;
         }
         let driven: Vec<bool> = (0..self.lanes.len())
-            .map(|slot| slot < MAX_BUZZ_SLOTS && slot_mask & (1 << slot) != 0)
+            .map(|slot| slot < MAX_BUZZ_SLOTS && route.slot_mask & (1 << slot) != 0)
             .collect();
         let Some((_, grid_clock)) = self.grid else {
             return ERR_BUZZ_UNGRIDDED_START;
@@ -478,17 +468,9 @@ impl ChainFiller {
         let Some(start_index) = self.index_at_or_after(start_clock_ns) else {
             return ERR_BUZZ_UNGRIDDED_START;
         };
-        let rc = self.buzz.arm(
-            self.lanes.len() as u8,
-            slot_mask,
-            sign_mask,
-            freq_start_millihz,
-            freq_end_millihz,
-            amplitude_nm,
-            duration_ms,
-            ramp_ms,
-            [0; MAX_BUZZ_SLOTS],
-        );
+        let rc = self
+            .buzz
+            .arm(self.lanes.len() as u8, route, sweep, [0; MAX_BUZZ_SLOTS]);
         if rc != 0 {
             return rc;
         }

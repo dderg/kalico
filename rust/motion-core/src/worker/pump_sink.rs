@@ -68,7 +68,7 @@ impl Projection {
         cfg: &crate::mcu_config::McuAxisConfig,
         seg: &ContinuousSegment,
     ) -> bool {
-        let module = crate::kinematics::KinematicsModule::from_tag(cfg.kinematics)
+        let module = crate::kinematics::KinematicsModule::from_tag(cfg.hw.kinematics)
             .expect("mcu_configs were validated at build");
         cfg.axes.iter().any(|&axis_idx| {
             if axis_idx >= seg.axes.len() {

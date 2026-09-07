@@ -749,7 +749,6 @@ version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
  "geometry",
- "libc",
  "libm",
  "nurbs",
  "proptest",

@@ -5,8 +5,71 @@ use super::{
 use motion_core::lock_ext::LockExt;
 use motion_core::pump::{BuzzParams, BuzzRoute, BuzzWave, EndpointBuzzSpec, EndpointCommand};
 use pyo3::types::PyAnyMethods;
-use pyo3::{Bound, PyAny};
+use pyo3::{Bound, FromPyObject, PyAny};
 use std::sync::Arc;
+
+/// The two drive slots one differential control acts across, and the lanes
+/// and kinematics tag that place them in the machine frame.
+#[derive(Debug, Clone, Copy, FromPyObject)]
+#[pyo3(from_item_all)]
+pub(super) struct StrainCompPair {
+    slot_a: u8,
+    slot_b: u8,
+    lane_a: u8,
+    lane_b: u8,
+    kinematics: u8,
+}
+
+/// The sampled strain map itself: a `nx` by `ny` grid of micrometre offsets
+/// anchored at (`x0`, `y0`) with `dx`/`dy` spacing.
+#[derive(Debug, Clone, FromPyObject)]
+#[pyo3(from_item_all)]
+pub(super) struct StrainCompGrid {
+    nx: u16,
+    ny: u16,
+    x0: f32,
+    y0: f32,
+    dx: f32,
+    dy: f32,
+    values_um: Vec<i32>,
+}
+
+/// One dynamics feedforward model as klippy assembles it: the mode shapes
+/// (`frame`), the per-mode physical terms, and the slot pairing.
+#[derive(Debug, Clone, FromPyObject)]
+#[pyo3(from_item_all)]
+pub(super) struct DynamicsModelRequest {
+    frame: Vec<f32>,
+    mass: Vec<f32>,
+    viscous: Vec<f32>,
+    coulomb: Vec<f32>,
+    compliance: Vec<f32>,
+    pin_mass: Vec<f32>,
+    pin_zeta: Vec<f32>,
+    pin_lead_us: f32,
+    pairs: Vec<u32>,
+    direction_split: Vec<f32>,
+}
+
+/// The gains one differential damper runs with.
+#[derive(Debug, Clone, Copy, FromPyObject)]
+#[pyo3(from_item_all)]
+pub(super) struct DiffDamperGains {
+    gain_milli: u32,
+    clamp_tenths: u16,
+    lpf_millihz: u32,
+    lead_us: u16,
+}
+
+/// The gains one differential trim runs with.
+#[derive(Debug, Clone, Copy, FromPyObject)]
+#[pyo3(from_item_all)]
+pub(super) struct DiffTrimGains {
+    gain_micro: u32,
+    clamp_um: u16,
+    lpf_millihz: u32,
+    settle_ms: u32,
+}
 
 #[pymethods]
 impl PyMotionEngine {
@@ -255,7 +318,7 @@ impl PyMotionEngine {
         };
         let motor = motion_core::mcu_config::motor_frame(&cfg, pos_mm);
         let seed_lanes: &[usize] =
-            if cfg.kinematics == motion_core::mcu_config::KINEMATICS_COREXY && axis <= 1 {
+            if cfg.hw.kinematics == motion_core::mcu_config::KINEMATICS_COREXY && axis <= 1 {
                 &[0, 1]
             } else {
                 &[axis]
@@ -459,19 +522,21 @@ impl PyMotionEngine {
             .complete()
             .map_err(|e| PyRuntimeError::new_err(format!("resonance_buzz_done: {e}")))
     }
-    #[allow(clippy::too_many_arguments)]
     fn set_diff_damper(
         &self,
         py: Python<'_>,
         mcu_handle: u32,
         slot_a: u8,
         slot_b: u8,
-        gain_milli: u32,
-        clamp_tenths: u16,
-        lpf_millihz: u32,
-        lead_us: u16,
+        gains: DiffDamperGains,
     ) -> PyResult<()> {
         let conn = self.ethercat_conn(mcu_handle, "set_diff_damper")?;
+        let DiffDamperGains {
+            gain_milli,
+            clamp_tenths,
+            lpf_millihz,
+            lead_us,
+        } = gains;
         tracing::info!(
             subsystem = "engine",
             event = "servo_set_diff_damper",
@@ -520,24 +585,29 @@ impl PyMotionEngine {
         })
         .map_err(PyRuntimeError::new_err)
     }
-    #[allow(clippy::too_many_arguments)]
     fn set_strain_comp(
         &self,
         mcu_handle: u32,
-        slot_a: u8,
-        slot_b: u8,
-        lane_a: u8,
-        lane_b: u8,
-        kinematics: u8,
-        nx: u16,
-        ny: u16,
-        x0: f32,
-        y0: f32,
-        dx: f32,
-        dy: f32,
-        values_um: Vec<i32>,
+        pair: StrainCompPair,
+        grid: StrainCompGrid,
     ) -> PyResult<()> {
         let conn = self.ethercat_conn(mcu_handle, "set_strain_comp")?;
+        let StrainCompPair {
+            slot_a,
+            slot_b,
+            lane_a,
+            lane_b,
+            kinematics,
+        } = pair;
+        let StrainCompGrid {
+            nx,
+            ny,
+            x0,
+            y0,
+            dx,
+            dy,
+            values_um,
+        } = grid;
         tracing::info!(
             subsystem = "engine",
             event = "servo_strain_comp",
@@ -577,11 +647,14 @@ impl PyMotionEngine {
         mcu_handle: u32,
         slot_a: u8,
         slot_b: u8,
-        gain_micro: u32,
-        clamp_um: u16,
-        lpf_millihz: u32,
-        settle_ms: u32,
+        gains: DiffTrimGains,
     ) -> PyResult<()> {
+        let DiffTrimGains {
+            gain_micro,
+            clamp_um,
+            lpf_millihz,
+            settle_ms,
+        } = gains;
         let conn = self.ethercat_conn(mcu_handle, "set_diff_trim")?;
         tracing::info!(
             subsystem = "engine",
@@ -614,22 +687,24 @@ impl PyMotionEngine {
             format!("set_diff_trim: endpoint rejected (result {result})")
         })
     }
-    #[allow(clippy::too_many_arguments)]
     fn set_dynamics_model(
         &self,
         py: Python<'_>,
         mcu_handle: u32,
-        frame: Vec<f32>,
-        mass: Vec<f32>,
-        viscous: Vec<f32>,
-        coulomb: Vec<f32>,
-        compliance: Vec<f32>,
-        pin_mass: Vec<f32>,
-        pin_zeta: Vec<f32>,
-        pin_lead_us: f32,
-        pairs: Vec<u32>,
-        direction_split: Vec<f32>,
+        model: DynamicsModelRequest,
     ) -> PyResult<()> {
+        let DynamicsModelRequest {
+            frame,
+            mass,
+            viscous,
+            coulomb,
+            compliance,
+            pin_mass,
+            pin_zeta,
+            pin_lead_us,
+            pairs,
+            direction_split,
+        } = model;
         let modes = mass.len();
         if modes == 0 {
             return Err(PyRuntimeError::new_err(
@@ -681,16 +756,22 @@ impl PyMotionEngine {
             })
             .collect();
         let host_model = ethercat_setpoint::dynamics::DynamicsModel::from_parts(
-            slots,
-            modes,
-            &frame,
-            &mass,
-            &viscous,
-            &coulomb,
-            &compliance,
-            &pin_mass,
-            &pin_zeta,
-            f64::from(pin_lead_us),
+            ethercat_setpoint::dynamics::FrameParts {
+                n_slots: slots,
+                n_modes: modes,
+                frame: &frame,
+            },
+            ethercat_setpoint::dynamics::ModeParts {
+                mass: &mass,
+                viscous: &viscous,
+                coulomb: &coulomb,
+                compliance: &compliance,
+            },
+            ethercat_setpoint::dynamics::PinParts {
+                mass: &pin_mass,
+                zeta: &pin_zeta,
+                lead_us: f64::from(pin_lead_us),
+            },
             &pair_specs,
         )
         .map_err(|e| {

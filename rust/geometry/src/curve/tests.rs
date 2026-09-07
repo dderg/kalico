@@ -57,9 +57,18 @@ fn collinear_handles_3d_diagonal() {
 
 #[test]
 fn g5_assembles_control_points_with_linear_z() {
-    let cps = g5_control_points([0.0, 0.0, 0.0], 2.0, 4.0, -3.0, 4.0, 10.0, 0.0, 6.0);
-    assert_eq!(cps[0], [0.0, 0.0, 0.0]); // P0 = start
-    assert_eq!(cps[1], [2.0, 4.0, 2.0]); // P1 = start+(I,J), z = dz/3
-    assert_eq!(cps[2], [7.0, 4.0, 4.0]); // P2 = end+(P,Q) = (10-3,0+4), z = 2dz/3
-    assert_eq!(cps[3], [10.0, 0.0, 6.0]); // P3 = end
+    let cps = g5_control_points(
+        [0.0, 0.0, 0.0],
+        BezierHandles {
+            i: 2.0,
+            j: 4.0,
+            p: -3.0,
+            q: 4.0,
+        },
+        [10.0, 0.0, 6.0],
+    );
+    assert_eq!(cps[0], [0.0, 0.0, 0.0]);
+    assert_eq!(cps[1], [2.0, 4.0, 2.0]);
+    assert_eq!(cps[2], [7.0, 4.0, 4.0]);
+    assert_eq!(cps[3], [10.0, 0.0, 6.0]);
 }

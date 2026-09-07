@@ -33,23 +33,70 @@ use super::cycle::compute_ring_targets;
 use super::drive::DriveChain;
 use super::{discard_motion, EndpointCtx};
 use crate::capture::{Capture, CaptureDriveConfig};
-use crate::damper::DiffDamperBank;
+use crate::damper::{DamperGains, DiffDamperBank};
 use crate::ffi::EcTelemetry;
 use crate::live_tap::LiveTap;
 use crate::mailbox::{MailboxWorker, WorkerScheduling};
+use crate::pair::SlotPair;
 use crate::sdo::SdoBus;
 use crate::sensorless::SensorlessBank;
 use crate::server::FrameServer;
+use crate::strain_comp::{CompGrid, CompPair};
 use crate::stream_halt::StreamHalt;
 use crate::torque::{TorqueGate, TorqueState};
-use crate::trim::DiffTrimBank;
+use crate::trim::{DiffTrimBank, TrimGains};
+use ethercat_setpoint::dynamics::{FrameParts, ModeParts, PinParts};
 use ethercat_setpoint::setpoint::Played;
+use ethercat_setpoint_fill::buzz::{BuzzRoute, BuzzSweep};
 use ethercat_setpoint_fill::setpoint_fill::{ChainFiller, LaneSpec, CLOCK_FREQ_HZ};
 
 const NUM_SLAVES: usize = 2;
 const COUNTS_PER_MM: f64 = 3276.8;
 const FOLLOWING_ERROR: [i32; NUM_SLAVES] = [40, -25];
 const CYCLE_NS: u64 = 250_000;
+
+fn pair(a: u8, b: u8) -> SlotPair {
+    SlotPair { a, b }
+}
+
+fn damper_gains(gain_milli: u32, clamp_tenths: u16, lpf_millihz: u32, lead_us: u16) -> DamperGains {
+    DamperGains {
+        gain_milli,
+        clamp_tenths,
+        lpf_millihz,
+        lead_us,
+    }
+}
+
+fn trim_gains(gain_micro: u32, clamp_um: u16, lpf_millihz: u32, settle_ms: u32) -> TrimGains {
+    TrimGains {
+        gain_micro,
+        clamp_um,
+        lpf_millihz,
+        settle_ms,
+    }
+}
+
+fn comp_pair(slot_a: u8, slot_b: u8, lane_a: u8, lane_b: u8, kinematics: u8) -> CompPair {
+    CompPair {
+        slot_a,
+        slot_b,
+        lane_a,
+        lane_b,
+        kinematics,
+    }
+}
+
+fn grid(nx: u16, ny: u16, x0: f64, y0: f64, dx: f64, dy: f64) -> CompGrid {
+    CompGrid {
+        nx,
+        ny,
+        x0,
+        y0,
+        dx,
+        dy,
+    }
+}
 
 struct TrackingLagDrive {
     targets: Vec<i32>,
@@ -273,25 +320,10 @@ impl Bench {
 
     /// Arm the host-generated buzz, the only buzz there is: the endpoint
     /// plays its samples out of the ring like any other motion.
-    #[allow(clippy::too_many_arguments)]
-    fn arm_buzz(
-        &mut self,
-        slot_mask: u8,
-        sign_mask: u8,
-        freq_start_millihz: u32,
-        freq_end_millihz: u32,
-        amplitude_nm: u32,
-        duration_ms: u32,
-        ramp_ms: u32,
-    ) -> i32 {
+    fn arm_buzz(&mut self, route: BuzzRoute, sweep: BuzzSweep) -> i32 {
         self.host.arm_buzz(
-            slot_mask,
-            sign_mask,
-            freq_start_millihz,
-            freq_end_millihz,
-            amplitude_nm,
-            duration_ms,
-            ramp_ms,
+            route,
+            sweep,
             self.grid_clock_ns + BUZZ_ARM_LEAD_CYCLES * CYCLE_NS,
         )
     }
@@ -777,7 +809,11 @@ fn damper_writes_antisymmetric_torque_in_the_drive_frame() {
     let mut ctx = test_ctx_with_drive("damper", TrackingLagDrive::with_drift(vec![drift, drift]));
     ctx.cmd_counts_per_mm[1] = -COUNTS_PER_MM;
     let gain_tenths_per_mm_s = 2.0;
-    assert_eq!(ctx.damper.set(NUM_SLAVES, 0, 1, 2_000, 100, 300_000, 0), 0);
+    assert_eq!(
+        ctx.damper
+            .set(NUM_SLAVES, pair(0, 1), damper_gains(2_000, 100, 300_000, 0)),
+        0
+    );
 
     ctx.run_cycles(0, 200 * CYCLE_NS);
 
@@ -807,7 +843,11 @@ fn trim_zeroes_a_standing_fight_at_commanded_standstill() {
         "trim-standstill",
         TrackingLagDrive::with_torques(vec![100, -100]),
     );
-    assert_eq!(ctx.trim.set(NUM_SLAVES, 0, 1, 200_000, 500, 25_000, 0), 0);
+    assert_eq!(
+        ctx.trim
+            .set(NUM_SLAVES, pair(0, 1), trim_gains(200_000, 500, 25_000, 0)),
+        0
+    );
     ctx.run_cycles(0, 40_000_000);
     let t = targets(&ctx);
     assert_eq!(
@@ -833,7 +873,11 @@ fn trim_handles_a_mirrored_pair_in_both_frames() {
         TrackingLagDrive::with_torques(vec![100, 100]),
     );
     ctx.cmd_counts_per_mm[1] = -COUNTS_PER_MM;
-    assert_eq!(ctx.trim.set(NUM_SLAVES, 0, 1, 200_000, 500, 25_000, 0), 0);
+    assert_eq!(
+        ctx.trim
+            .set(NUM_SLAVES, pair(0, 1), trim_gains(200_000, 500, 25_000, 0)),
+        0
+    );
     ctx.run_cycles(0, 40_000_000);
     let t = targets(&ctx);
     assert_eq!(
@@ -858,7 +902,9 @@ fn trim_freezes_while_the_pair_is_streaming() {
         TrackingLagDrive::with_torques(vec![100, -100]),
     );
     assert_eq!(
-        trimmed.trim.set(NUM_SLAVES, 0, 1, 200_000, 500, 25_000, 0),
+        trimmed
+            .trim
+            .set(NUM_SLAVES, pair(0, 1), trim_gains(200_000, 500, 25_000, 0)),
         0
     );
 
@@ -882,7 +928,14 @@ fn trim_waits_out_the_settle_window_after_motion() {
         "trim-settle",
         TrackingLagDrive::with_torques(vec![100, -100]),
     );
-    assert_eq!(ctx.trim.set(NUM_SLAVES, 0, 1, 200_000, 500, 25_000, 200), 0);
+    assert_eq!(
+        ctx.trim.set(
+            NUM_SLAVES,
+            pair(0, 1),
+            trim_gains(200_000, 500, 25_000, 200)
+        ),
+        0
+    );
     ctx.push_all(ramp(1_000_000, 0.01, 0.0, 5.0));
     ctx.run_cycles(1_000_000, 12_000_000);
     let at_rest = targets(&ctx);
@@ -909,7 +962,11 @@ fn damper_stays_quiet_on_common_mode_velocity() {
         "damper-cm",
         TrackingLagDrive::with_drift(vec![drift, drift]),
     );
-    assert_eq!(ctx.damper.set(NUM_SLAVES, 0, 1, 2_000, 100, 300_000, 0), 0);
+    assert_eq!(
+        ctx.damper
+            .set(NUM_SLAVES, pair(0, 1), damper_gains(2_000, 100, 300_000, 0)),
+        0
+    );
 
     ctx.run_cycles(0, 200 * CYCLE_NS);
 
@@ -928,8 +985,12 @@ fn strain_comp_moves_held_targets_at_standstill() {
     ctx.run_cycles(1_000_000, 12_000_000);
     let held = targets(&ctx);
     assert_eq!(
-        ctx.comp
-            .set(NUM_SLAVES, 0, 1, 0, 1, 0, 1, 1, 0.0, 0.0, 1.0, 1.0, &[100]),
+        ctx.comp.set(
+            NUM_SLAVES,
+            comp_pair(0, 1, 0, 1, 0),
+            grid(1, 1, 0.0, 0.0, 1.0, 1.0),
+            &[100]
+        ),
         0
     );
     ctx.run_cycles(12_250_000, 200_000_000);
@@ -959,8 +1020,12 @@ fn strain_comp_reaches_held_targets_after_a_stop_discard() {
     assert!(ctx.last_counts.iter().all(Option::is_none));
     let held = targets(&ctx);
     assert_eq!(
-        ctx.comp
-            .set(NUM_SLAVES, 0, 1, 0, 1, 0, 1, 1, 0.0, 0.0, 1.0, 1.0, &[100]),
+        ctx.comp.set(
+            NUM_SLAVES,
+            comp_pair(0, 1, 0, 1, 0),
+            grid(1, 1, 0.0, 0.0, 1.0, 1.0),
+            &[100]
+        ),
         0
     );
     ctx.run_cycles(12_250_000, 200_000_000);
@@ -981,8 +1046,12 @@ fn strain_comp_reaches_targets_that_never_streamed() {
     let mut ctx = test_ctx("comp-fresh");
     let held = targets(&ctx);
     assert_eq!(
-        ctx.comp
-            .set(NUM_SLAVES, 0, 1, 0, 1, 0, 1, 1, 0.0, 0.0, 1.0, 1.0, &[100]),
+        ctx.comp.set(
+            NUM_SLAVES,
+            comp_pair(0, 1, 0, 1, 0),
+            grid(1, 1, 0.0, 0.0, 1.0, 1.0),
+            &[100]
+        ),
         0
     );
     ctx.run_cycles(1_000_000, 200_000_000);
@@ -1004,15 +1073,23 @@ fn strain_comp_clear_returns_held_targets_to_base() {
     let mut ctx = test_ctx("comp-clear");
     let held = targets(&ctx);
     assert_eq!(
-        ctx.comp
-            .set(NUM_SLAVES, 0, 1, 0, 1, 0, 1, 1, 0.0, 0.0, 1.0, 1.0, &[-100]),
+        ctx.comp.set(
+            NUM_SLAVES,
+            comp_pair(0, 1, 0, 1, 0),
+            grid(1, 1, 0.0, 0.0, 1.0, 1.0),
+            &[-100]
+        ),
         0
     );
     ctx.run_cycles(1_000_000, 200_000_000);
     assert_ne!(targets(&ctx), held, "probe offset must be applied first");
     assert_eq!(
-        ctx.comp
-            .set(NUM_SLAVES, 0, 1, 0, 1, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, &[]),
+        ctx.comp.set(
+            NUM_SLAVES,
+            comp_pair(0, 1, 0, 1, 0),
+            grid(0, 0, 0.0, 0.0, 0.0, 0.0),
+            &[]
+        ),
         0
     );
     ctx.run_cycles(200_250_000, 400_000_000);
@@ -1044,7 +1121,22 @@ fn buzzed_slot_ff_carries_no_coulomb_square_wave() {
     ctx.install_dynamics(BUZZ_DYNAMICS);
     ctx.torque_clamp_tenths = vec![300; NUM_SLAVES];
     ctx.cycle_at(0);
-    assert_eq!(ctx.arm_buzz(0b01, 0, 60_000, 60_000, 100_000, 500, 20), 0);
+    assert_eq!(
+        ctx.arm_buzz(
+            BuzzRoute {
+                slot_mask: 0b01,
+                sign_mask: 0
+            },
+            BuzzSweep {
+                freq_start_millihz: 60_000,
+                freq_end_millihz: 60_000,
+                amplitude_nm: 100_000,
+                duration_ms: 500,
+                ramp_ms: 20
+            },
+        ),
+        0
+    );
 
     let mut max_abs_offset: i16 = 0;
     let mut max_abs_target: i32 = 0;
@@ -1461,7 +1553,19 @@ const BUZZ_AMP_NM: u32 = 100_000; // 0.1 mm
 fn run_buzz_collect(ctx: &mut Bench, freq_millihz: u32, cycles: u64) -> (Vec<f32>, Vec<i32>) {
     ctx.cycle_at(1_000_000);
     assert_eq!(
-        ctx.arm_buzz(0b01, 0, freq_millihz, freq_millihz, BUZZ_AMP_NM, 2000, 20),
+        ctx.arm_buzz(
+            BuzzRoute {
+                slot_mask: 0b01,
+                sign_mask: 0
+            },
+            BuzzSweep {
+                freq_start_millihz: freq_millihz,
+                freq_end_millihz: freq_millihz,
+                amplitude_nm: BUZZ_AMP_NM,
+                duration_ms: 2000,
+                ramp_ms: 20
+            },
+        ),
         0
     );
     let mut pin = Vec::with_capacity(cycles as usize);
@@ -1582,7 +1686,19 @@ fn set_dynamics_model_mid_buzz_rebuilds_pin_cleanly() {
     let f_notch = 50_000u32;
     ctx.cycle_at(1_000_000);
     assert_eq!(
-        ctx.arm_buzz(0b01, 0, f_notch, f_notch, BUZZ_AMP_NM, 4000, 20),
+        ctx.arm_buzz(
+            BuzzRoute {
+                slot_mask: 0b01,
+                sign_mask: 0
+            },
+            BuzzSweep {
+                freq_start_millihz: f_notch,
+                freq_end_millihz: f_notch,
+                amplitude_nm: BUZZ_AMP_NM,
+                duration_ms: 4000,
+                ramp_ms: 20
+            },
+        ),
         0
     );
     // Run the tone on the original zeta=0.1 model until the pin torque has
@@ -1761,28 +1877,24 @@ fn pin_residual_demod_converges_and_stays_bounded() {
 /// reference `τ_pin`. A correct lift makes the two equal; a plain Fᵀ lift
 /// attenuates `F·slot` by `F·Fᵀ`.
 fn pin_frame_cancellation(
-    frame: &[f32],
-    n_modes: usize,
-    n_slots: usize,
+    shape: FrameParts<'_>,
     mass: &[f32],
     compliance: &[f32],
-    pin_mass: &[f32],
-    pin_zeta: &[f32],
+    pin_parts: PinParts<'_>,
     acc_seq: &[Vec<f32>],
 ) -> (Vec<Vec<f32>>, Vec<Vec<f32>>) {
     use ethercat_setpoint::dynamics::DynamicsModel;
+    let (n_modes, n_slots) = (shape.n_modes, shape.n_slots);
     let zeros_m = vec![0.0f32; n_modes];
     let model = DynamicsModel::from_parts(
-        n_slots,
-        n_modes,
-        frame,
-        mass,
-        &zeros_m,
-        &zeros_m,
-        compliance,
-        pin_mass,
-        pin_zeta,
-        0.0,
+        shape,
+        ModeParts {
+            mass,
+            viscous: &zeros_m,
+            coulomb: &zeros_m,
+            compliance,
+        },
+        pin_parts,
         &[],
     )
     .unwrap();
@@ -1792,16 +1904,22 @@ fn pin_frame_cancellation(
     let mut refs: Vec<super::cycle::PinState> = (0..n_modes)
         .map(|k| {
             let m = DynamicsModel::from_parts(
-                1,
-                1,
-                &[1.0],
-                &[mass[k]],
-                &[0.0],
-                &[0.0],
-                &[compliance[k]],
-                &[pin_mass[k]],
-                &[pin_zeta[k]],
-                0.0,
+                FrameParts {
+                    n_slots: 1,
+                    n_modes: 1,
+                    frame: &[1.0],
+                },
+                ModeParts {
+                    mass: &[mass[k]],
+                    viscous: &[0.0],
+                    coulomb: &[0.0],
+                    compliance: &[compliance[k]],
+                },
+                PinParts {
+                    mass: &[pin_parts.mass[k]],
+                    zeta: &[pin_parts.zeta[k]],
+                    lead_us: pin_parts.lead_us,
+                },
                 &[],
             )
             .unwrap();
@@ -1877,16 +1995,22 @@ fn assert_pin_cancels_every_mode(
     // Model handle for the F⁺ excitation columns (min-norm slot accel that
     // realizes a pure mode-k acceleration).
     let model = ethercat_setpoint::dynamics::DynamicsModel::from_parts(
-        n_slots,
-        n_modes,
-        frame,
-        mass,
-        &vec![0.0f32; n_modes],
-        &vec![0.0f32; n_modes],
-        &compliance,
-        &pin_mass,
-        &pin_zeta,
-        0.0,
+        FrameParts {
+            n_slots,
+            n_modes,
+            frame,
+        },
+        ModeParts {
+            mass,
+            viscous: &vec![0.0f32; n_modes],
+            coulomb: &vec![0.0f32; n_modes],
+            compliance: &compliance,
+        },
+        PinParts {
+            mass: &pin_mass,
+            zeta: &pin_zeta,
+            lead_us: 0.0,
+        },
         &[],
     )
     .unwrap();
@@ -1905,13 +2029,18 @@ fn assert_pin_cancels_every_mode(
             })
             .collect();
         let (achieved, reference) = pin_frame_cancellation(
-            frame,
-            n_modes,
-            n_slots,
+            FrameParts {
+                n_slots,
+                n_modes,
+                frame,
+            },
             mass,
             &compliance,
-            &pin_mass,
-            &pin_zeta,
+            PinParts {
+                mass: &pin_mass,
+                zeta: &pin_zeta,
+                lead_us: 0.0,
+            },
             &acc_seq,
         );
         // Steady-state tail only (skip the ring build-up).
@@ -2087,16 +2216,22 @@ fn pin_torque_vanishes_at_constant_accel_for_every_lead() {
         let compliance = 1.0 / (2.0 * std::f64::consts::PI * f_b).powi(2);
         for &lead_us in &[0.0f64, 300.0, 600.0, 1200.0] {
             let model = DynamicsModel::from_parts(
-                1,
-                1,
-                &[1.0],
-                &[0.04],
-                &[0.0],
-                &[0.0],
-                &[compliance as f32],
-                &[PIN_MASS],
-                &[0.02],
-                lead_us,
+                FrameParts {
+                    n_slots: 1,
+                    n_modes: 1,
+                    frame: &[1.0],
+                },
+                ModeParts {
+                    mass: &[0.04],
+                    viscous: &[0.0],
+                    coulomb: &[0.0],
+                    compliance: &[compliance as f32],
+                },
+                PinParts {
+                    mass: &[PIN_MASS],
+                    zeta: &[0.02],
+                    lead_us,
+                },
                 &[],
             )
             .unwrap();

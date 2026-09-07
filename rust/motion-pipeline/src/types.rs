@@ -1,10 +1,34 @@
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
+use geometry::path::lowering::PositionProfile;
 use geometry::{CornerFitConfig, Move, MoveVelocity, SurfaceTransform, VelocityLimits};
 use trajectory::{AxisChainSet, ContinuousSegment, NudgeProfile};
 
 pub const CONTIGUITY_EPS_MM: f64 = 1e-6;
+
+#[must_use]
+pub fn dist3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let dx = a[0] - b[0];
+    let dy = a[1] - b[1];
+    let dz = a[2] - b[2];
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
+pub fn advance_odometer(pos: &mut [f64], movement: &Move) {
+    let length = movement.segment.s_len();
+    if let Some(segment) = &movement.segment.spatial {
+        let end = segment.point_at(length);
+        for axis in 0..3.min(pos.len()) {
+            pos[axis] = end[axis];
+        }
+    }
+    for follower in &movement.segment.followers {
+        if let Some(slot) = pos.get_mut(follower.axis_index) {
+            *slot += follower.delta_over(length);
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct StreamConfig {
@@ -25,6 +49,15 @@ pub struct StreamConfig {
     /// through the bridge carry their own per-move limits; this is the fallback
     /// used when the engine constructs a move itself.
     pub limits: VelocityLimits,
+}
+
+impl StreamConfig {
+    pub(crate) fn fit_tol(&self) -> crate::lowering::FitTol {
+        crate::lowering::FitTol {
+            pos_mm: self.fit_tol_mm,
+            accel_mm_s2: self.fit_tol_accel_mm_s2,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -63,7 +96,7 @@ impl std::fmt::Display for StreamError {
 impl std::error::Error for StreamError {}
 
 #[derive(Debug, thiserror::Error)]
-pub enum PostProcessError {
+pub(crate) enum PostProcessError {
     #[error("segment axis count mismatch: expected {expected}, got {got}")]
     AxisCountMismatch { expected: usize, got: usize },
     #[error("axis {axis}: cannot fit shaped signal on an empty template track")]
@@ -126,10 +159,6 @@ pub struct PlannedMove {
     pub velocity: MoveVelocity,
 }
 
-pub struct BaseSegment {
-    pub segment: ContinuousSegment,
-}
-
 /// What flows into the fit stage and planner: geometry, the command to stop
 /// looking ahead, or an ordered control token. `Drain` makes each stage
 /// resolve and emit everything it is holding — the fit stage finalizes runs
@@ -152,11 +181,10 @@ impl From<Move> for StreamInput {
 
 /// Ordered control tokens that flow through every stage with the geometry.
 /// The pipeline is set up once and lives forever; these replace the old
-/// teardown-and-rebuild lifecycle. Tokens that require the trajectory to be
-/// at rest (`Dwell`, `SetAxisChains`, `Nudge`, `Barrier` after a flush) must
-/// be preceded by a `Drain`; the stages assert emptiness rather than draining
-/// implicitly, so a violated protocol fails loudly instead of hiding a
-/// velocity discontinuity.
+/// teardown-and-rebuild lifecycle. Every token except `Reset` requires the
+/// trajectory to be at rest and must be preceded by a `Drain`; the stages
+/// assert emptiness rather than draining implicitly, so a violated protocol
+/// fails loudly instead of hiding a velocity discontinuity.
 #[derive(Debug)]
 pub enum Control {
     /// Advance the trajectory clock without motion (lowerer applies it).
@@ -179,19 +207,25 @@ pub enum Control {
         mesh: Option<Arc<SurfaceTransform>>,
         gcode_z_rebase: f64,
     },
-    /// A pre-lowered single-axis correction (endstop nudge) for the
-    /// dispatcher: it never touches the planned trajectory, so the stages
-    /// forward it untouched. The follow-up `Dwell` the sender emits advances
-    /// the stream clock over the nudge's duration.
+    /// Opaque to every planning stage: forwarded in order, never inspected.
+    Dispatch(DispatchCommand),
+}
+
+/// Commands the dispatcher executes once everything ahead of them has been
+/// dispatched. Adding one touches this enum and the dispatcher only.
+#[derive(Debug)]
+pub enum DispatchCommand {
+    /// A pre-lowered single-axis correction (endstop nudge). The follow-up
+    /// `Dwell` the sender emits advances the stream clock over its duration.
     Nudge {
         mcu_id: u32,
         axis: u8,
         motor_mask: u8,
         profile: NudgeProfile,
     },
-    /// Acknowledged by the dispatcher once everything ahead of it has been
-    /// dispatched (or discarded): the pipeline-wide "everything before this
-    /// point is done" fence.
+    /// Acknowledged once everything ahead of it has been dispatched (or
+    /// discarded): the pipeline-wide "everything before this point is done"
+    /// fence.
     Barrier(Sender<BarrierAck>),
 }
 
@@ -219,7 +253,7 @@ pub enum PlannedItem {
 
 /// Lowerer → shaper.
 pub enum BaseItem {
-    Seg(BaseSegment),
+    Seg(ContinuousSegment),
     Drain,
     Control(Control),
 }

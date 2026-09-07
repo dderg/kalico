@@ -5,14 +5,15 @@ use crossbeam_channel::Sender;
 use nurbs::bezier::{BezierPiece, bezier_pieces_to_nurbs, extract_bezier_pieces};
 use trajectory::{
     AxisChainSet, ChainStage, CompiledChain, ContinuousAxis, ContinuousSegment,
-    RelativeSplinePiece, ShapedSignal, SurfaceMode,
+    RelativeSplinePiece, ShapedSignal, next_toward,
 };
 
 use crate::follower_projection::{FollowerState, project_followers};
 use crate::lowering::{
-    FitTol, LADDER_PROBES_U, LadderFailure, LadderPolicy, exact_piece, ladder_fit, quintic_in_u,
+    AccelerationTrend, FitTol, LADDER_PROBES_U, LadderBudget, LadderFailure, LadderPolicy,
+    LadderPva, LadderSpan, LadderTruth, VelocitySign, exact_piece, ladder_fit, quintic_in_u,
 };
-use crate::types::{BaseItem, BaseSegment, Control, PostProcessError, TrajectoryItem};
+use crate::types::{BaseItem, Control, PostProcessError, TrajectoryItem};
 
 pub(crate) trait TrackSignal {
     fn eval_pva(&self, t: f64) -> (f64, f64, f64);
@@ -32,7 +33,7 @@ pub(crate) trait TrackSignal {
         let _ = (t0, t1);
         p1 - p0
     }
-    fn acceleration_monotonicity(&self, _start: f64, _end: f64) -> Option<bool> {
+    fn acceleration_monotonicity(&self, _start: f64, _end: f64) -> Option<AccelerationTrend> {
         None
     }
     fn diagnostic(&self, _t: f64) -> Option<String> {
@@ -203,8 +204,7 @@ impl Shaper {
         self
     }
 
-    fn buffer_segment(&mut self, item: BaseSegment) {
-        let mut segment = item.segment;
+    fn buffer_segment(&mut self, mut segment: ContinuousSegment) {
         let started = crate::timing::stopwatch();
         let rebuilt = materialize_changed_sources(&mut segment, &self.chains, self.fit_tol)
             .unwrap_or_else(|error| panic!("shaper: {error}"));
@@ -254,8 +254,7 @@ impl Shaper {
                     Control::Dwell { .. }
                     | Control::SetAxisChains(_)
                     | Control::SetMesh { .. }
-                    | Control::Nudge { .. }
-                    | Control::Barrier(_) => {
+                    | Control::Dispatch(_) => {
                         assert!(
                             self.pending.is_empty() || self.pending.ends_at_rest(),
                             "shaper: control token arrived while the trajectory is not at \
@@ -371,17 +370,29 @@ impl Shaper {
         let pending = &mut self.pending;
         let segments = pending.segments.make_contiguous();
         let shaped = apply_axis_chains(
-            &self.history,
-            segments,
+            AxisFitRequest {
+                history: &self.history,
+                base: segments,
+                chains: &self.chains,
+                fit_tol: self.fit_tol,
+                boundary: if self.history_trimmed {
+                    FitBoundary::Interior
+                } else {
+                    FitBoundary::StreamBoundary
+                },
+                lookahead: if force {
+                    Lookahead::Forced
+                } else {
+                    Lookahead::Required
+                },
+            },
             count,
             frontier_count,
-            force,
-            !self.history_trimmed,
-            &self.chains,
-            self.fit_tol,
-            &mut self.follower_states,
-            self.toolhead_tap.as_ref(),
-            &mut pending.shaped,
+            ShaperOutputs {
+                follower_states: &mut self.follower_states,
+                shaped_cache: &mut pending.shaped,
+                toolhead_tap: self.toolhead_tap.as_ref(),
+            },
         )
         .unwrap_or_else(|e| panic!("shaper: {e}"));
         for seg in shaped {
@@ -413,22 +424,6 @@ impl Shaper {
     }
 }
 
-pub(crate) fn analytic_phase_boundary(span_start: f64, local_boundary: f64) -> f64 {
-    let mut boundary = span_start + local_boundary;
-    loop {
-        let previous = next_toward(boundary, f64::NEG_INFINITY);
-        if previous - span_start > local_boundary {
-            boundary = previous;
-        } else {
-            break;
-        }
-    }
-    while boundary - span_start <= local_boundary {
-        boundary = next_toward(boundary, f64::INFINITY);
-    }
-    boundary
-}
-
 fn materialize_changed_sources(
     segment: &mut ContinuousSegment,
     chains: &AxisChainSet,
@@ -437,11 +432,7 @@ fn materialize_changed_sources(
     let mut replacements = Vec::new();
     for (axis, source) in segment.axes.iter().enumerate() {
         let variable_surface_z = axis == 2
-            && matches!(
-                source,
-                ContinuousAxis::Analytic { span, .. }
-                    if matches!(&span.surface, SurfaceMode::Variable(_))
-            );
+            && matches!(source, ContinuousAxis::Analytic { span, .. } if span.has_variable_surface());
         let changed = chains
             .chains
             .get(axis)
@@ -452,46 +443,23 @@ fn materialize_changed_sources(
         }
         let mut breakpoints = vec![segment.t_start, segment.t_end];
         if let ContinuousAxis::Analytic { span, .. } = source {
-            breakpoints.extend(
-                span.phases
-                    .iter()
-                    .take(span.phases.len().saturating_sub(1))
-                    .map(|phase| analytic_phase_boundary(span.t_start, phase.end_time())),
-            );
+            breakpoints.extend(span.phase_seam_times());
             if variable_surface_z {
-                if let SurfaceMode::Variable(surface) = &span.surface {
-                    if let Some(spatial) = span.source.segment.spatial.as_ref() {
-                        let transitions =
-                            surface.path_transition_distances(spatial).map_err(|_| {
-                                fit_tolerance_without_probe(axis, segment.t_start, segment.t_end)
-                            })?;
-                        for transition in transitions {
-                            if let Some(phase) = span.phases.iter().find(|phase| {
-                                transition.s >= phase.s0 && transition.s <= phase.end_distance()
-                            }) {
-                                let local_t =
-                                    phase.time_at_distance(transition.s).ok_or_else(|| {
-                                        fit_tolerance_without_probe(
-                                            axis,
-                                            segment.t_start,
-                                            segment.t_end,
-                                        )
-                                    })?;
-                                breakpoints.push(span.t_start + local_t);
-                            }
-                        }
-                    }
-                }
+                breakpoints.extend(span.surface_seam_times().ok_or_else(|| {
+                    fit_tolerance_without_probe(axis, segment.t_start, segment.t_end)
+                })?);
             }
         }
         let mut curve = fit_axis_from_signal(
-            axis,
-            segment.t_start,
-            segment.t_end,
-            &breakpoints,
+            AxisFit {
+                axis,
+                t_start: segment.t_start,
+                t_end: segment.t_end,
+                seed_breakpoints: &breakpoints,
+                fit_tol,
+                fit_context: "materialize_source",
+            },
             source,
-            fit_tol,
-            "materialize_source",
         )?;
         if !chains.is_projected_follower(axis) {
             if let Some(chain) = chains.chains.get(axis) {
@@ -509,25 +477,86 @@ fn materialize_changed_sources(
     Ok(rebuilt)
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Whether the fit window's left edge is the start of the signal — where the
+/// convolution clamps at the first sample — or an interior cut whose missing
+/// history is an error.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FitBoundary {
+    Interior,
+    StreamBoundary,
+}
+
+/// Whether the fit may read past the last buffered sample by clamping (a
+/// drain flush holds the timeline at the terminal rest) or must have its
+/// lookahead covered.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Lookahead {
+    Required,
+    Forced,
+}
+
+impl FitBoundary {
+    fn clamps_before_signal(self) -> bool {
+        self == Self::StreamBoundary
+    }
+}
+
+impl Lookahead {
+    pub(crate) fn clamps_past_signal(self) -> bool {
+        self == Self::Forced
+    }
+}
+
+/// Everything one emit window's leader fits read: the signal the convolution
+/// integrates (history plus the buffered base), the chains and tolerance it
+/// is fitted with, and how the window's two edges behave.
+#[derive(Clone, Copy)]
+struct AxisFitRequest<'a> {
+    history: &'a VecDeque<ContinuousSegment>,
+    base: &'a [ContinuousSegment],
+    chains: &'a AxisChainSet,
+    fit_tol: FitTol,
+    boundary: FitBoundary,
+    lookahead: Lookahead,
+}
+
+/// The shaper state one emit writes through: the follower projection states,
+/// the shaped-leader cache, and the toolhead mirror.
+struct ShaperOutputs<'a> {
+    follower_states: &'a mut Vec<FollowerState>,
+    shaped_cache: &'a mut VecDeque<ContinuousSegment>,
+    toolhead_tap: Option<&'a Sender<ContinuousSegment>>,
+}
+
+impl ShaperOutputs<'_> {
+    fn mirror_toolhead(&self, out: &[ContinuousSegment]) {
+        let Some(tap) = self.toolhead_tap else { return };
+        for seg in out {
+            tap.send(seg.clone())
+                .expect("shaper: toolhead tap receiver dropped");
+        }
+    }
+}
+
 fn apply_axis_chains(
-    history: &VecDeque<ContinuousSegment>,
-    base: &[ContinuousSegment],
+    request: AxisFitRequest,
     commit_count: usize,
     frontier_count: usize,
-    force: bool,
-    at_stream_boundary: bool,
-    chains: &AxisChainSet,
-    fit_tol: FitTol,
-    follower_states: &mut Vec<FollowerState>,
-    toolhead_tap: Option<&Sender<ContinuousSegment>>,
-    shaped_cache: &mut VecDeque<ContinuousSegment>,
+    outputs: ShaperOutputs,
 ) -> Result<Vec<ContinuousSegment>, PostProcessError> {
+    let AxisFitRequest {
+        history,
+        base,
+        chains,
+        fit_tol,
+        lookahead,
+        ..
+    } = request;
     if chains.chains.iter().all(CompiledChain::is_empty)
-        && follower_states.iter().all(|s| !s.is_active())
+        && outputs.follower_states.iter().all(|s| !s.is_active())
     {
         let out: Vec<ContinuousSegment> = base.iter().take(commit_count).cloned().collect();
-        send_toolhead(toolhead_tap, &out);
+        outputs.mirror_toolhead(&out);
         return Ok(out);
     }
     let window = frontier_count.max(commit_count);
@@ -551,44 +580,35 @@ fn apply_axis_chains(
         prev = Some(seg);
     }
     debug_assert!(
-        shaped_cache.len() <= window,
+        outputs.shaped_cache.len() <= window,
         "frontier retreated below the shaped-leader cache"
     );
     let work = crate::timing::PhaseWorkload {
         window,
         commit: commit_count,
         frontier: frontier_count,
-        force,
+        force: lookahead.clamps_past_signal(),
         ..Default::default()
     };
-    if window > shaped_cache.len() {
-        let mut fresh: Vec<ContinuousSegment> = base[shaped_cache.len()..window].to_vec();
-        fit_leader_axes(
-            history,
-            base,
-            &mut fresh,
-            n_axes,
-            force,
-            at_stream_boundary,
-            chains,
-            fit_tol,
-            work,
-        )?;
-        shaped_cache.extend(fresh);
+    if window > outputs.shaped_cache.len() {
+        let mut fresh: Vec<ContinuousSegment> = base[outputs.shaped_cache.len()..window].to_vec();
+        fit_leader_axes(request, &mut fresh, n_axes, work)?;
+        outputs.shaped_cache.extend(fresh);
     }
-    let frontier = &shaped_cache.make_contiguous()[..window];
+    let frontier = &outputs.shaped_cache.make_contiguous()[..window];
     let mut out: Vec<ContinuousSegment> = frontier.iter().take(commit_count).cloned().collect();
     let projection_started = crate::timing::stopwatch();
     let mut projection_timing = crate::follower_projection::ProjectionTiming::default();
     project_followers(
-        base,
-        frontier,
+        crate::follower_projection::ProjectionWindow {
+            base,
+            frontier,
+            chains,
+            fit_tol,
+            lookahead,
+        },
         &mut out,
-        commit_count,
-        force,
-        chains,
-        fit_tol,
-        follower_states,
+        outputs.follower_states,
         &mut projection_timing,
     )?;
     let projection_us = projection_started.elapsed_us();
@@ -598,13 +618,17 @@ fn apply_axis_chains(
             projection_us,
             crate::timing::PhaseWorkload {
                 segments: out.len(),
-                axes: follower_states.iter().filter(|s| s.is_active()).count(),
+                axes: outputs
+                    .follower_states
+                    .iter()
+                    .filter(|s| s.is_active())
+                    .count(),
                 ..work
             },
             &projection_timing.detail(),
         );
     }
-    send_toolhead(toolhead_tap, &out);
+    outputs.mirror_toolhead(&out);
     let motor_started = crate::timing::stopwatch();
     let (motor_axes, motor_pieces) = apply_motor_side_stages(&mut out, chains, fit_tol)?;
     let motor_us = motor_started.elapsed_us();
@@ -622,14 +646,6 @@ fn apply_axis_chains(
         );
     }
     Ok(out)
-}
-
-fn send_toolhead(tap: Option<&Sender<ContinuousSegment>>, out: &[ContinuousSegment]) {
-    let Some(tap) = tap else { return };
-    for seg in out {
-        tap.send(seg.clone())
-            .expect("shaper: toolhead tap receiver dropped");
-    }
 }
 
 /// Trailing derivative-gain stages produce the motor command (e.g. a
@@ -754,16 +770,20 @@ fn constant_axis_column(
 }
 
 fn fit_axis_column(
-    history: &VecDeque<ContinuousSegment>,
-    base: &[ContinuousSegment],
+    request: AxisFitRequest,
     targets: &[ContinuousSegment],
     axis: usize,
-    force: bool,
-    at_stream_boundary: bool,
     target_workers: usize,
     chain: &CompiledChain,
-    fit_tol: FitTol,
 ) -> Result<Option<Vec<nurbs::ScalarNurbs>>, PostProcessError> {
+    let AxisFitRequest {
+        history,
+        base,
+        fit_tol,
+        boundary,
+        lookahead,
+        ..
+    } = request;
     let Some(kernel) = chain.kernel() else {
         return Ok(None);
     };
@@ -777,10 +797,10 @@ fn fit_axis_column(
     for seg in targets {
         let need_lo = seg.t_start - k_hi;
         let need_hi = seg.t_end - k_lo;
-        if need_lo < first_t && !at_stream_boundary {
+        if need_lo < first_t && !boundary.clamps_before_signal() {
             return Err(PostProcessError::MissingHistory { axis, t: need_lo });
         }
-        if need_hi > last_t && !force {
+        if need_hi > last_t && !lookahead.clamps_past_signal() {
             return Err(PostProcessError::MissingLookahead { axis, t: need_hi });
         }
     }
@@ -795,43 +815,57 @@ fn fit_axis_column(
         .map(|piece| piece.degree())
         .max()
         .expect("shaper kernel has no pieces");
+    let bounds = SignalBounds {
+        first_t,
+        last_t,
+        boundary,
+        lookahead,
+    };
     let table = Arc::new(
-        AxisSignalTable::build(
-            &signal_segments,
-            axis,
-            first_t,
-            last_t,
-            at_stream_boundary,
-            force,
-        )
-        .with_piece_moments(kernel_degree),
+        AxisSignalTable::build(&signal_segments, axis, bounds).with_piece_moments(kernel_degree),
     );
     let input_degree = table.max_degree();
     fit_axis_targets(
         axis,
         targets,
-        kernel,
-        table,
-        input_breaks,
-        shaped_breaks,
-        input_degree,
+        ShapedSignalSource {
+            kernel,
+            table,
+            input_breaks,
+            shaped_breaks,
+            input_degree,
+        },
         fit_tol,
         target_workers,
     )
     .map(Some)
 }
 
-fn fit_axis_targets(
-    axis: usize,
-    targets: &[ContinuousSegment],
-    kernel: &nurbs::algebra::PiecewisePolynomialKernel,
+/// The convolution's input for one axis, packaged for the target fits: the
+/// kernel, the flattened signal it integrates, and the breakpoint sets that
+/// seed the input and shaped partitions.
+struct ShapedSignalSource<'a> {
+    kernel: &'a nurbs::algebra::PiecewisePolynomialKernel,
     table: Arc<AxisSignalTable>,
     input_breaks: Vec<f64>,
     shaped_breaks: Vec<f64>,
     input_degree: usize,
+}
+
+fn fit_axis_targets(
+    axis: usize,
+    targets: &[ContinuousSegment],
+    source: ShapedSignalSource,
     fit_tol: FitTol,
     target_workers: usize,
 ) -> Result<Vec<nurbs::ScalarNurbs>, PostProcessError> {
+    let ShapedSignalSource {
+        kernel,
+        table,
+        input_breaks,
+        shaped_breaks,
+        input_degree,
+    } = source;
     if targets.is_empty() {
         return Ok(Vec::new());
     }
@@ -863,13 +897,15 @@ fn fit_axis_targets(
     if max_seed_spans < LEADER_SPAN_PARALLEL_THRESHOLD {
         let fit_target = |target: &ContinuousSegment, sig: &_| {
             let track = fit_axis_from_signal(
-                axis,
-                target.t_start,
-                target.t_end,
-                &shaped_breaks,
+                AxisFit {
+                    axis,
+                    t_start: target.t_start,
+                    t_end: target.t_end,
+                    seed_breakpoints: &shaped_breaks,
+                    fit_tol,
+                    fit_context: "smooth_kernel_target",
+                },
                 sig,
-                fit_tol,
-                "smooth_kernel_target",
             )?;
             if !track.control_points().iter().all(|value| value.is_finite()) {
                 return Err(PostProcessError::NonFiniteSample {
@@ -1023,18 +1059,25 @@ fn fit_axis_targets(
         let mut refinement_splits = 0;
         let mut pieces = Vec::new();
         refine_shaped_span(
-            axis,
             sig,
-            t_start,
-            t_end,
-            fit_tol,
-            "smooth_kernel_target",
-            f64::INFINITY,
-            plan.floors,
-            plan.max_depth,
-            0,
-            t_start,
-            t_end,
+            RefineSpan {
+                t0: t_start,
+                t1: t_end,
+                depth: 0,
+            },
+            &SpanFitPolicy {
+                axis,
+                fit_tol,
+                fit_context: "smooth_kernel_target",
+                velocity_budget: f64::INFINITY,
+                floors: plan.floors,
+                max_depth: plan.max_depth,
+                velocity_sign: VelocitySign::Unconstrained,
+            },
+            SpanSeeds {
+                lower: t_start,
+                upper: t_end,
+            },
             &mut refinement_splits,
             &mut pieces,
         )
@@ -1121,13 +1164,15 @@ fn fit_axis_targets(
         let track = if needs_serial_fit || refinement_splits > MAX_FIT_REFINEMENT_SPLITS {
             let sig = make_sig();
             fit_axis_from_signal(
-                axis,
-                targets[target_index].t_start,
-                targets[target_index].t_end,
-                &shaped_breaks,
+                AxisFit {
+                    axis,
+                    t_start: targets[target_index].t_start,
+                    t_end: targets[target_index].t_end,
+                    seed_breakpoints: &shaped_breaks,
+                    fit_tol,
+                    fit_context: "smooth_kernel_target",
+                },
                 &sig,
-                fit_tol,
-                "smooth_kernel_target",
             )?
         } else {
             fit_pieces_to_nurbs(axis, pieces)?
@@ -1144,16 +1189,12 @@ fn fit_axis_targets(
 }
 
 fn fit_leader_axes(
-    history: &VecDeque<ContinuousSegment>,
-    base: &[ContinuousSegment],
+    request: AxisFitRequest,
     fresh: &mut [ContinuousSegment],
     n_axes: usize,
-    force: bool,
-    at_stream_boundary: bool,
-    chains: &AxisChainSet,
-    fit_tol: FitTol,
     work: crate::timing::PhaseWorkload,
 ) -> Result<(), PostProcessError> {
+    let chains = request.chains;
     let default_chain = CompiledChain::default();
     let axis_chains: Vec<(usize, &CompiledChain)> = (0..n_axes)
         .filter(|&axis| !chains.is_projected_follower(axis))
@@ -1184,17 +1225,8 @@ fn fit_leader_axes(
                 .map(|&(axis, chain)| {
                     scope.spawn(move || {
                         let column_started = crate::timing::stopwatch();
-                        let column = fit_axis_column(
-                            history,
-                            base,
-                            fresh_ref,
-                            axis,
-                            force,
-                            at_stream_boundary,
-                            target_workers,
-                            chain,
-                            fit_tol,
-                        );
+                        let column =
+                            fit_axis_column(request, fresh_ref, axis, target_workers, chain);
                         (axis, column, column_started.elapsed_us())
                     })
                 })
@@ -1209,17 +1241,7 @@ fn fit_leader_axes(
             .iter()
             .map(|&(axis, chain)| {
                 let column_started = crate::timing::stopwatch();
-                let column = fit_axis_column(
-                    history,
-                    base,
-                    fresh,
-                    axis,
-                    force,
-                    at_stream_boundary,
-                    target_workers,
-                    chain,
-                    fit_tol,
-                );
+                let column = fit_axis_column(request, fresh, axis, target_workers, chain);
                 (axis, column, column_started.elapsed_us())
             })
             .collect()
@@ -1236,7 +1258,7 @@ fn fit_leader_axes(
             crate::timing::PhaseWorkload {
                 segments: fresh.len(),
                 axes: axis_chains.len(),
-                force,
+                force: request.lookahead.clamps_past_signal(),
                 ..work
             },
             &per_axis.join(" "),
@@ -1480,50 +1502,47 @@ pub(crate) struct AxisSignalTable {
     coeffs: Vec<Vec<f64>>,
     first_t: f64,
     last_t: f64,
-    at_stream_boundary: bool,
-    force: bool,
+    boundary: FitBoundary,
+    lookahead: Lookahead,
     moment_trees: Option<[MomentTree; MOMENT_ORDERS]>,
     input_jumps: Vec<(f64, f64, f64)>,
+}
+
+/// The time extent of a flattened signal window and how its two edges
+/// behave when the convolution reads past them.
+#[derive(Clone, Copy)]
+pub(crate) struct SignalBounds {
+    pub first_t: f64,
+    pub last_t: f64,
+    pub boundary: FitBoundary,
+    pub lookahead: Lookahead,
 }
 
 const MOMENT_ORDERS: usize = 3;
 
 impl AxisSignalTable {
-    fn build(
-        segments: &[&ContinuousSegment],
-        axis: usize,
-        first_t: f64,
-        last_t: f64,
-        at_stream_boundary: bool,
-        force: bool,
-    ) -> Self {
+    fn build(segments: &[&ContinuousSegment], axis: usize, bounds: SignalBounds) -> Self {
         Self::from_tracks(
             segments.iter().map(|seg| match &seg.axes[axis] {
                 ContinuousAxis::Spline(track) => track.as_ref(),
                 _ => panic!("shaper: changed axis was not materialized"),
             }),
-            first_t,
-            last_t,
-            at_stream_boundary,
-            force,
+            bounds,
         )
     }
 
     pub(crate) fn from_tracks<'a>(
         tracks: impl IntoIterator<Item = &'a nurbs::ScalarNurbs>,
-        first_t: f64,
-        last_t: f64,
-        at_stream_boundary: bool,
-        force: bool,
+        bounds: SignalBounds,
     ) -> Self {
         let mut table = Self {
             starts: Vec::new(),
             ends: Vec::new(),
             coeffs: Vec::new(),
-            first_t,
-            last_t,
-            at_stream_boundary,
-            force,
+            first_t: bounds.first_t,
+            last_t: bounds.last_t,
+            boundary: bounds.boundary,
+            lookahead: bounds.lookahead,
             moment_trees: None,
             input_jumps: Vec::new(),
         };
@@ -1624,7 +1643,9 @@ impl AxisSignalTable {
         if !lo.is_finite() || !hi.is_finite() || !origin.is_finite() || lo > hi {
             return false;
         }
-        if (lo < self.first_t && !self.at_stream_boundary) || (hi > self.last_t && !self.force) {
+        if (lo < self.first_t && !self.boundary.clamps_before_signal())
+            || (hi > self.last_t && !self.lookahead.clamps_past_signal())
+        {
             return false;
         }
         let interior_lo = lo.max(self.first_t);
@@ -1768,13 +1789,13 @@ impl AxisSignalTable {
     /// cache-line contention.
     pub(crate) fn eval_hinted(&self, t: f64, hint: &std::cell::Cell<usize>) -> f64 {
         if t < self.first_t {
-            if !self.at_stream_boundary {
+            if !self.boundary.clamps_before_signal() {
                 return f64::NAN;
             }
             return self.piece_at(0, self.first_t);
         }
         if t > self.last_t {
-            if !self.force {
+            if !self.lookahead.clamps_past_signal() {
                 return f64::NAN;
             }
             return self.piece_at(self.coeffs.len() - 1, self.last_t);
@@ -2003,59 +2024,59 @@ fn fit_pieces_to_nurbs(
     Ok(bezier_pieces_to_nurbs(&pieces))
 }
 
-pub(crate) fn fit_axis_from_signal<S: TrackSignal>(
-    axis: usize,
-    t_start: f64,
-    t_end: f64,
-    seed_breakpoints: &[f64],
-    sig: &S,
-    fit_tol: FitTol,
-    fit_context: &'static str,
-) -> Result<nurbs::ScalarNurbs, PostProcessError> {
-    fit_axis_from_signal_with_velocity_budget(
-        axis,
-        t_start,
-        t_end,
-        seed_breakpoints,
-        sig,
-        fit_tol,
-        fit_context,
-        f64::INFINITY,
-    )
+/// One axis fit: the span to cover, the partition seeds, and the budgets it
+/// must meet.
+#[derive(Clone, Copy)]
+pub(crate) struct AxisFit<'a> {
+    pub axis: usize,
+    pub t_start: f64,
+    pub t_end: f64,
+    pub seed_breakpoints: &'a [f64],
+    pub fit_tol: FitTol,
+    pub fit_context: &'static str,
 }
 
-fn fit_axis_from_signal_with_velocity_budget<S: TrackSignal>(
-    axis: usize,
-    t_start: f64,
-    t_end: f64,
-    seed_breakpoints: &[f64],
+pub(crate) fn fit_axis_from_signal<S: TrackSignal>(
+    fit: AxisFit,
     sig: &S,
-    fit_tol: FitTol,
-    fit_context: &'static str,
-    velocity_budget: f64,
 ) -> Result<nurbs::ScalarNurbs, PostProcessError> {
-    let plan = prepare_fit_plan(axis, t_start, t_end, seed_breakpoints, sig, fit_tol)?;
+    let plan = prepare_fit_plan(
+        fit.axis,
+        fit.t_start,
+        fit.t_end,
+        fit.seed_breakpoints,
+        sig,
+        fit.fit_tol,
+    )?;
+    let policy = SpanFitPolicy {
+        axis: fit.axis,
+        fit_tol: fit.fit_tol,
+        fit_context: fit.fit_context,
+        velocity_budget: f64::INFINITY,
+        floors: plan.floors,
+        max_depth: plan.max_depth,
+        velocity_sign: VelocitySign::Unconstrained,
+    };
     let mut refinement_splits = 0;
     let mut pieces = Vec::with_capacity(plan.seeds.len());
     for span in plan.seeds.windows(2) {
         refine_shaped_span(
-            axis,
             sig,
-            span[0],
-            span[1],
-            fit_tol,
-            fit_context,
-            velocity_budget,
-            plan.floors,
-            plan.max_depth,
-            0,
-            span[0],
-            span[1],
+            RefineSpan {
+                t0: span[0],
+                t1: span[1],
+                depth: 0,
+            },
+            &policy,
+            SpanSeeds {
+                lower: span[0],
+                upper: span[1],
+            },
             &mut refinement_splits,
             &mut pieces,
         )?;
     }
-    fit_pieces_to_nurbs(axis, pieces)
+    fit_pieces_to_nurbs(fit.axis, pieces)
 }
 
 /// The convolution samples one span is fitted against, held by node rather
@@ -2179,6 +2200,36 @@ fn acceleration_interval_witness<S: TrackSignal>(
 
 const LADDER_FIT_NODES_U: [f64; 3] = [0.0, 0.5, -0.5];
 
+/// Everything one fit's spans are refined against: the axis being fitted,
+/// its budgets, the resolution floors of the signal, and the rung rules.
+#[derive(Clone, Copy)]
+struct SpanFitPolicy {
+    axis: usize,
+    fit_tol: FitTol,
+    fit_context: &'static str,
+    velocity_budget: f64,
+    floors: LadderFloors,
+    max_depth: u32,
+    velocity_sign: VelocitySign,
+}
+
+/// One span of a refinement tree: its bounds and how deep the bisection
+/// already is.
+#[derive(Clone, Copy)]
+struct RefineSpan {
+    t0: f64,
+    t1: f64,
+    depth: u32,
+}
+
+/// The partition seeds the refined span sits between, reported by a fit
+/// failure so the provenance of an unfittable span is readable.
+#[derive(Clone, Copy)]
+struct SpanSeeds {
+    lower: f64,
+    upper: f64,
+}
+
 /// Ladder fit of the shaped signal over one span: the endpoint-anchored
 /// quadratic carrying the span's own travel, the cubic through both endpoint
 /// velocities, then the quintic Hermite matching the convolution's exact
@@ -2189,15 +2240,13 @@ const LADDER_FIT_NODES_U: [f64; 3] = [0.0, 0.5, -0.5];
 /// quintic base with `fits = false` so the caller can bisect.
 #[allow(clippy::type_complexity)]
 fn shaped_ladder<S: TrackSignal>(
-    axis: usize,
     sig: &S,
     t0: f64,
     t1: f64,
-    fit_tol: FitTol,
-    velocity_budget: f64,
-    enforce_velocity_sign: bool,
-    high_degree_span_floor: f64,
+    policy: &SpanFitPolicy,
 ) -> Result<(Vec<f64>, Option<LadderFailure>), PostProcessError> {
+    let axis = policy.axis;
+    let fit_tol = policy.fit_tol;
     let h = t1 - t0;
     let t_of = |u: f64| nurbs::fmadd(0.5 * (u + 1.0), h, t0);
     let interior_t_of = |u: f64| {
@@ -2255,18 +2304,20 @@ fn shaped_ladder<S: TrackSignal>(
 
     match ladder_fit(
         &base,
-        h,
-        fit_tol,
-        &|u| truth.pos_at(u),
-        &|u| truth.acc_at(u),
-        &|u| truth.vel_at(u),
-        endpoint_delta,
-        velocity_budget,
+        LadderSpan { h, endpoint_delta },
+        &LadderTruth {
+            position: &|u| truth.pos_at(u),
+            velocity: &|u| truth.vel_at(u),
+            acceleration: &|u| truth.acc_at(u),
+        },
+        LadderBudget {
+            tol: fit_tol,
+            velocity: policy.velocity_budget,
+        },
         LadderPolicy {
-            endpoint_anchored: true,
-            enforce_velocity_sign,
+            velocity_sign: policy.velocity_sign,
             acceleration_monotonicity: sig.acceleration_monotonicity(t0_inside, t1_inside),
-            high_degree_span_floor,
+            high_degree_span_floor: policy.floors.high_degree,
         },
     ) {
         Ok(coefficients) => {
@@ -2287,21 +2338,31 @@ fn shaped_ladder<S: TrackSignal>(
                 coefficients,
                 Some(LadderFailure {
                     u,
-                    position_error: (candidate_position - source_position).abs(),
-                    velocity_error: (candidate_velocity - source_velocity).abs(),
-                    acceleration_error: (candidate_acceleration - source_acceleration).abs(),
-                    source_position,
-                    source_velocity,
-                    source_acceleration,
-                    candidate_position,
-                    candidate_velocity,
-                    candidate_acceleration,
-                    left_position: p0,
-                    left_velocity: v0,
-                    left_acceleration: a0,
-                    right_position: p1,
-                    right_velocity: v1,
-                    right_acceleration: a1,
+                    error: LadderPva {
+                        position: (candidate_position - source_position).abs(),
+                        velocity: (candidate_velocity - source_velocity).abs(),
+                        acceleration: (candidate_acceleration - source_acceleration).abs(),
+                    },
+                    source: LadderPva {
+                        position: source_position,
+                        velocity: source_velocity,
+                        acceleration: source_acceleration,
+                    },
+                    candidate: LadderPva {
+                        position: candidate_position,
+                        velocity: candidate_velocity,
+                        acceleration: candidate_acceleration,
+                    },
+                    left: LadderPva {
+                        position: p0,
+                        velocity: v0,
+                        acceleration: a0,
+                    },
+                    right: LadderPva {
+                        position: p1,
+                        velocity: v1,
+                        acceleration: a1,
+                    },
                 }),
             ))
         }
@@ -2309,66 +2370,33 @@ fn shaped_ladder<S: TrackSignal>(
     }
 }
 
-fn next_toward(value: f64, toward: f64) -> f64 {
-    if value == toward {
-        return value;
-    }
-    if value == 0.0 {
-        return if toward > 0.0 {
-            f64::from_bits(1)
-        } else {
-            f64::from_bits((1_u64 << 63) | 1)
-        };
-    }
-    let bits = value.to_bits();
-    if (toward > value) == (value > 0.0) {
-        f64::from_bits(bits + 1)
-    } else {
-        f64::from_bits(bits - 1)
-    }
-}
-
 fn refine_shaped_span<S: TrackSignal>(
-    axis: usize,
     sig: &S,
-    t0: f64,
-    t1: f64,
-    fit_tol: FitTol,
-    fit_context: &'static str,
-    velocity_budget: f64,
-    floors: LadderFloors,
-    max_depth: u32,
-    depth: u32,
-    lower_seed: f64,
-    upper_seed: f64,
+    span: RefineSpan,
+    policy: &SpanFitPolicy,
+    seeds: SpanSeeds,
     refinement_splits: &mut usize,
     out: &mut Vec<BezierPiece>,
 ) -> Result<(), PostProcessError> {
-    let enforce_velocity_sign = false;
-    let (mono_u, failure) = shaped_ladder(
-        axis,
-        sig,
-        t0,
-        t1,
-        fit_tol,
-        velocity_budget,
-        enforce_velocity_sign,
-        floors.high_degree,
-    )?;
+    let RefineSpan { t0, t1, depth } = span;
+    let fit_tol = policy.fit_tol;
+    let velocity_budget = policy.velocity_budget;
+    let floors = policy.floors;
+    let (mono_u, failure) = shaped_ladder(sig, t0, t1, policy)?;
     if failure.is_none() {
         out.push(exact_piece(&mono_u, t0, t1, t1 - t0));
         return Ok(());
     }
     let tm = 0.5 * t0 + 0.5 * t1;
     if t1 - t0 <= floors.cubic
-        || depth >= max_depth
+        || depth >= policy.max_depth
         || *refinement_splits >= MAX_FIT_REFINEMENT_SPLITS
         || tm <= t0
         || tm >= t1
     {
         let failure = failure.expect("failed fit has no ladder diagnostic");
-        if failure.position_error <= fit_tol.pos_mm
-            && failure.velocity_error <= velocity_budget
+        if failure.error.position <= fit_tol.pos_mm
+            && failure.error.velocity <= velocity_budget
             && t1 - t0 <= floors.high_degree
             && sig
                 .acceleration_monotonicity(next_toward(t0, t1), next_toward(t1, t0))
@@ -2379,68 +2407,60 @@ fn refine_shaped_span<S: TrackSignal>(
         }
         let probe_t = nurbs::fmadd(0.5 * (failure.u + 1.0), t1 - t0, t0);
         return Err(PostProcessError::FitTolerance {
-            axis,
+            axis: policy.axis,
             t_start: t0,
             t_end: t1,
             probe_u: failure.u,
             probe_t,
-            lower_seed,
-            upper_seed,
+            lower_seed: seeds.lower,
+            upper_seed: seeds.upper,
             lower_seed_provenance: "phase/spline/kernel-shift breakpoint",
             upper_seed_provenance: "phase/spline/kernel-shift breakpoint",
-            left_position: failure.left_position,
-            left_velocity: failure.left_velocity,
-            left_acceleration: failure.left_acceleration,
+            left_position: failure.left.position,
+            left_velocity: failure.left.velocity,
+            left_acceleration: failure.left.acceleration,
             signal_detail: sig.diagnostic(probe_t),
-            right_position: failure.right_position,
-            right_velocity: failure.right_velocity,
-            right_acceleration: failure.right_acceleration,
-            position_error: failure.position_error,
+            right_position: failure.right.position,
+            right_velocity: failure.right.velocity,
+            right_acceleration: failure.right.acceleration,
+            position_error: failure.error.position,
             position_budget: fit_tol.pos_mm,
-            fit_context,
+            fit_context: policy.fit_context,
             refinement_splits: *refinement_splits,
-            velocity_error: failure.velocity_error,
+            velocity_error: failure.error.velocity,
             velocity_budget,
-            acceleration_error: failure.acceleration_error,
+            acceleration_error: failure.error.acceleration,
             acceleration_budget: fit_tol.accel_mm_s2,
-            source_position: failure.source_position,
-            source_velocity: failure.source_velocity,
-            source_acceleration: failure.source_acceleration,
-            candidate_position: failure.candidate_position,
-            candidate_velocity: failure.candidate_velocity,
-            candidate_acceleration: failure.candidate_acceleration,
+            source_position: failure.source.position,
+            source_velocity: failure.source.velocity,
+            source_acceleration: failure.source.acceleration,
+            candidate_position: failure.candidate.position,
+            candidate_velocity: failure.candidate.velocity,
+            candidate_acceleration: failure.candidate.acceleration,
         });
     }
     *refinement_splits += 1;
     refine_shaped_span(
-        axis,
         sig,
-        t0,
-        tm,
-        fit_tol,
-        fit_context,
-        velocity_budget,
-        floors,
-        max_depth,
-        depth + 1,
-        lower_seed,
-        upper_seed,
+        RefineSpan {
+            t0,
+            t1: tm,
+            depth: depth + 1,
+        },
+        policy,
+        seeds,
         refinement_splits,
         out,
     )?;
     refine_shaped_span(
-        axis,
         sig,
-        tm,
-        t1,
-        fit_tol,
-        fit_context,
-        velocity_budget,
-        floors,
-        max_depth,
-        depth + 1,
-        lower_seed,
-        upper_seed,
+        RefineSpan {
+            t0: tm,
+            t1,
+            depth: depth + 1,
+        },
+        policy,
+        seeds,
         refinement_splits,
         out,
     )
@@ -2607,13 +2627,15 @@ pub(crate) fn apply_nonlinear_advance_to_track(
     let mut breakpoints = track.knots().to_vec();
     breakpoints.extend(nonlinear_transition_breakpoints(&sig));
     fit_axis_from_signal(
-        axis,
-        t_start,
-        t_end,
-        &breakpoints,
+        AxisFit {
+            axis,
+            t_start,
+            t_end,
+            seed_breakpoints: &breakpoints,
+            fit_tol,
+            fit_context: "nonlinear_advance",
+        },
         &sig,
-        fit_tol,
-        "nonlinear_advance",
     )
 }
 
@@ -2737,7 +2759,7 @@ impl TrackSignal for NonlinearAdvanceSignal {
         )
     }
 
-    fn acceleration_monotonicity(&self, start: f64, end: f64) -> Option<bool> {
+    fn acceleration_monotonicity(&self, start: f64, end: f64) -> Option<AccelerationTrend> {
         let piece = self.piece_at(start);
         if self.piece_at(end) != piece
             || self.coeffs[piece]
@@ -2750,13 +2772,12 @@ impl TrackSignal for NonlinearAdvanceSignal {
         let (_, start_velocity, acceleration, _) = self.input_state(start);
         let (_, end_velocity, _, _) = self.input_state(end);
         if acceleration == 0.0 || self.adv.nonlinear_offset == 0.0 {
-            return Some(true);
+            return Some(AccelerationTrend::Increasing);
         }
         let direction = acceleration * self.adv.nonlinear_offset;
         match self.adv.model {
-            trajectory::AdvanceModel::Reciprocal => {
-                (start_velocity * end_velocity > 0.0).then_some(direction > 0.0)
-            }
+            trajectory::AdvanceModel::Reciprocal => (start_velocity * end_velocity > 0.0)
+                .then(|| AccelerationTrend::of_direction(direction)),
             trajectory::AdvanceModel::Tanh => {
                 let extremum = tanh_acceleration_extremum_velocity(self.adv);
                 let initial_velocity = self.coeffs[piece][1];
@@ -2765,9 +2786,9 @@ impl TrackSignal for NonlinearAdvanceSignal {
                 let lower = first.min(second);
                 let upper = first.max(second);
                 if end <= lower || start >= upper {
-                    Some(direction > 0.0)
+                    Some(AccelerationTrend::of_direction(direction))
                 } else if start >= lower && end <= upper {
-                    Some(direction < 0.0)
+                    Some(AccelerationTrend::of_direction(-direction))
                 } else {
                     None
                 }

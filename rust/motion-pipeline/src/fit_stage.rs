@@ -148,8 +148,7 @@ impl FitStage {
             Control::Dwell { .. }
             | Control::SetAxisChains(_)
             | Control::SetMesh { .. }
-            | Control::Nudge { .. }
-            | Control::Barrier(_) => {
+            | Control::Dispatch(_) => {
                 assert!(
                     self.decided.is_empty() && self.tail.is_empty(),
                     "fit_stage: control token arrived with undrained moves — a Drain must precede it"

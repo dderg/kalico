@@ -13,7 +13,7 @@ use geometry::{LawSegment, Move, ScalarLaw, SourceRange, VelocityLimits};
 use motion_core::anchor::StreamEpoch;
 use motion_core::enqueue::{EnqueueCtx, enqueue_segment};
 use motion_core::kinematics::KinematicsKind;
-use motion_core::mcu_config::McuAxisConfig;
+use motion_core::mcu_config::{McuAxisConfig, McuHardware};
 use motion_core::pump::{LaneProjection, MAX_LEAD_SECS};
 use motion_core::types::AxisKey;
 use nurbs::ScalarNurbs;
@@ -301,8 +301,11 @@ impl Scenario {
                 ethercat: self.ethercat,
                 mcu_id: index as u32,
                 axes: axes.clone(),
-                kinematics: self.kinematics(),
-                max_motor_velocity: max_motor_velocity.clone(),
+                hw: McuHardware {
+                    kinematics: self.kinematics(),
+                    max_motor_velocity: max_motor_velocity.clone(),
+                    ..Default::default()
+                },
                 ..Default::default()
             })
             .collect()

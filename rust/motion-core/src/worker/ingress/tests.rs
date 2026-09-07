@@ -26,7 +26,10 @@ fn a_slow_drain_reserves_runway_for_repeating_it_even_after_a_faster_drain() {
     let downstream = std::thread::spawn(move || {
         for delay in [slow, Duration::ZERO, Duration::ZERO] {
             while let Ok(item) = output.recv() {
-                if let motion_pipeline::TrajectoryItem::Control(Control::Barrier(reply)) = item {
+                if let motion_pipeline::TrajectoryItem::Control(Control::Dispatch(
+                    DispatchCommand::Barrier(reply),
+                )) = item
+                {
                     std::thread::sleep(delay);
                     reply
                         .send(BarrierAck {

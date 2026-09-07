@@ -138,7 +138,7 @@ pub(crate) fn collect_motor_positions_inner(
     let kin_tag = configs
         .iter()
         .find(|c| c.axes.contains(&0usize))
-        .map(|c| c.kinematics)
+        .map(|c| c.hw.kinematics)
         .unwrap_or(motion_core::kinematics::KinematicsKind::Cartesian as u8);
 
     let mut motors: [Option<f64>; MAX_AXES] = [None; MAX_AXES];

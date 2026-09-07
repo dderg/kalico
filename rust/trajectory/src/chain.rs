@@ -340,6 +340,12 @@ impl CompiledChain {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RestSupport {
+    pub before_motion: f64,
+    pub after_motion: f64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AxisChainSet {
     pub chains: Vec<CompiledChain>,
@@ -440,6 +446,18 @@ impl AxisChainSet {
         (0..self.n_axes())
             .map(|axis| self.axis_support(axis).0.abs())
             .fold(0.0, f64::max)
+    }
+
+    /// The rest the post-processors demand around motion: `before_motion`
+    /// is the widest forward kernel support, `after_motion` the widest back
+    /// support. This pair is the only thing the lowerer needs from a chain
+    /// set to size its rest-holds.
+    #[must_use]
+    pub fn rest_support(&self) -> RestSupport {
+        RestSupport {
+            before_motion: self.forward_support(),
+            after_motion: self.back_support(),
+        }
     }
 
     /// The widest forward support among directly-convolved (non-follower)

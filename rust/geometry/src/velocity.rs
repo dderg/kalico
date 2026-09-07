@@ -134,13 +134,28 @@ struct MoveCaps {
     kappa_peak: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VelocityPlanParams {
+    pub integration_tol: f64,
+    pub max_extrude_only_velocity_mm_s: f64,
+    pub max_extrude_only_accel_mm_s2: f64,
+    pub entry_v: f64,
+}
+
+#[cfg(test)]
+pub(crate) fn warm_start_params(integration_tol: f64) -> VelocityPlanParams {
+    VelocityPlanParams {
+        integration_tol,
+        max_extrude_only_velocity_mm_s: f64::INFINITY,
+        max_extrude_only_accel_mm_s2: f64::INFINITY,
+        entry_v: 0.0,
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn plan_velocity_warm_start(
     outcome: &FitOutcome,
-    integration_tol: f64,
-    max_extrude_only_velocity_mm_s: f64,
-    max_extrude_only_accel_mm_s2: f64,
-    entry_v: f64,
+    params: VelocityPlanParams,
 ) -> Result<VelocityProfile, VelocityError> {
     let stop_lines: HashSet<u32> = outcome
         .report
@@ -157,77 +172,42 @@ pub(crate) fn plan_velocity_warm_start(
                 && !matches!(m.segment.spatial, Some(Segment::Clothoid(_)))
         })
         .collect();
-    plan_velocity_stops(
-        &outcome.moves,
-        &stop_before,
-        integration_tol,
-        max_extrude_only_velocity_mm_s,
-        max_extrude_only_accel_mm_s2,
-        entry_v,
-    )
+    plan_velocity_stops(&outcome.moves, &stop_before, params)
 }
 
 /// Plan over an already-fitted move sequence with explicit per-seam stop
 /// anchors: `stop_before[k]` forces rest at the seam entering `moves[k]`.
-/// `stop_before[0]` is ignored — the entry seam is anchored at `entry_v`.
+/// `stop_before[0]` is ignored — the entry seam is anchored at
+/// `params.entry_v`.
 pub fn plan_velocity_stops(
     moves: &[crate::Move],
     stop_before: &[bool],
-    integration_tol: f64,
-    max_extrude_only_velocity_mm_s: f64,
-    max_extrude_only_accel_mm_s2: f64,
-    entry_v: f64,
+    params: VelocityPlanParams,
 ) -> Result<VelocityProfile, VelocityError> {
-    plan_velocity_stops_reconstruct_prefix(
-        moves,
-        stop_before,
-        integration_tol,
-        max_extrude_only_velocity_mm_s,
-        max_extrude_only_accel_mm_s2,
-        entry_v,
-        moves.len(),
-    )
+    plan_velocity_stops_reconstruct_prefix(moves, stop_before, params, moves.len())
 }
 
 pub fn plan_velocity_stops_reconstruct_prefix(
     moves: &[crate::Move],
     stop_before: &[bool],
-    integration_tol: f64,
-    max_extrude_only_velocity_mm_s: f64,
-    max_extrude_only_accel_mm_s2: f64,
-    entry_v: f64,
+    params: VelocityPlanParams,
     reconstruct_count: usize,
 ) -> Result<VelocityProfile, VelocityError> {
-    plan_velocity_stops_select_prefix(
-        moves,
-        stop_before,
-        integration_tol,
-        max_extrude_only_velocity_mm_s,
-        max_extrude_only_accel_mm_s2,
-        entry_v,
-        |_| reconstruct_count,
-    )
+    plan_velocity_stops_select_prefix(moves, stop_before, params, |_| reconstruct_count)
 }
 
 pub fn plan_velocity_stops_select_prefix<F>(
     moves: &[crate::Move],
     stop_before: &[bool],
-    integration_tol: f64,
-    max_extrude_only_velocity_mm_s: f64,
-    max_extrude_only_accel_mm_s2: f64,
-    entry_v: f64,
+    params: VelocityPlanParams,
     select_prefix: F,
 ) -> Result<VelocityProfile, VelocityError>
 where
     F: FnOnce(usize) -> usize,
 {
-    let tol = integration_tol;
-    validate_config(
-        tol,
-        entry_v,
-        max_extrude_only_velocity_mm_s,
-        max_extrude_only_accel_mm_s2,
-    )?;
+    let tol = params.integration_tol;
+    let entry_v = params.entry_v;
+    validate_config(params)?;
 
     let n = moves.len();
     assert_eq!(stop_before.len(), n, "one stop flag per move");
@@ -248,12 +228,7 @@ where
     }
 
     let mut report = VelocityReport::default();
-    let caps = build_move_caps(
-        moves,
-        max_extrude_only_velocity_mm_s,
-        max_extrude_only_accel_mm_s2,
-        &mut report,
-    )?;
+    let caps = build_move_caps(moves, params, &mut report)?;
     check_entry_ceiling(moves, &caps, entry_v, tol)?;
     let mut plan = seed_seam_velocities(&caps, stop_before, entry_v, &mut report);
     let geo = compute_run_geometry(&caps, &plan);
@@ -282,13 +257,14 @@ where
     })
 }
 
-fn validate_config(
-    tol: f64,
-    entry_v: f64,
-    max_extrude_only_velocity_mm_s: f64,
-    max_extrude_only_accel_mm_s2: f64,
-) -> Result<(), VelocityError> {
-    if !(tol.is_finite() && tol >= MIN_INTEGRATION_TOL) {
+fn validate_config(params: VelocityPlanParams) -> Result<(), VelocityError> {
+    let VelocityPlanParams {
+        integration_tol,
+        max_extrude_only_velocity_mm_s,
+        max_extrude_only_accel_mm_s2,
+        entry_v,
+    } = params;
+    if !(integration_tol.is_finite() && integration_tol >= MIN_INTEGRATION_TOL) {
         return Err(VelocityError::InvalidConfig);
     }
     if !(entry_v.is_finite() && entry_v >= 0.0) {
@@ -302,8 +278,7 @@ fn validate_config(
 
 fn build_move_caps(
     moves: &[crate::Move],
-    max_extrude_only_velocity_mm_s: f64,
-    max_extrude_only_accel_mm_s2: f64,
+    params: VelocityPlanParams,
     report: &mut VelocityReport,
 ) -> Result<Vec<MoveCaps>, VelocityError> {
     let mut caps = Vec::with_capacity(moves.len());
@@ -328,8 +303,8 @@ fn build_move_caps(
                 if !(length.is_finite() && length > LENGTH_EPS_MM) {
                     return Err(VelocityError::NonFinite { line_no });
                 }
-                accel = accel.min(max_extrude_only_accel_mm_s2);
-                extrude_only_velocity_cap = max_extrude_only_velocity_mm_s;
+                accel = accel.min(params.max_extrude_only_accel_mm_s2);
+                extrude_only_velocity_cap = params.max_extrude_only_velocity_mm_s;
                 (length, 0.0, 0.0, 0.0)
             }
         };

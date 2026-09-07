@@ -10,17 +10,6 @@ fn unsupported_curve(py: Python<'_>, message: &'static str) -> PyResult<()> {
     py.detach(|| Err(PyRuntimeError::new_err(message)))
 }
 
-pub(super) fn require_supported_jerk_override(jerk: Option<f64>) -> Result<(), &'static str> {
-    match jerk {
-        None => Ok(()),
-        Some(jerk) if jerk == f64::INFINITY => Ok(()),
-        Some(jerk) if jerk.is_finite() => {
-            Err("finite jerk overrides are not supported by the continuous trajectory pipeline")
-        }
-        Some(_) => Err("jerk override must be positive infinity or None"),
-    }
-}
-
 pub(super) fn require_single_motor_mask(motor_mask: u8) -> Result<(), String> {
     if motor_mask.count_ones() > 1 {
         return Err(format!(
@@ -58,39 +47,98 @@ impl McuTopology {
         McuTopologyInput {
             mcu_id: self.mcu_id,
             axes: self.axes,
-            kinematics: self.kinematics,
-            max_motor_velocity: self.max_motor_velocity,
             lane_kinds: self.lane_kinds,
-            motor_counts: self.motor_counts,
-            microstep_distance: self.microstep_distance,
-            invert_dir: self.invert_dir,
-            stepper_oids: self.stepper_oids,
-            move_queue_slots: self.move_queue_slots,
-            step_pulse_seconds: self.step_pulse_seconds,
             high_precision_step_compress: self.high_precision_step_compress,
-            stepcompress_max_error_secs: self.stepcompress_max_error_secs,
-            phase_sample_rate: self.phase_sample_rate,
-            phase_ring_depth: self.phase_ring_depth,
+            hw: motion_core::mcu_config::McuHardware {
+                kinematics: self.kinematics,
+                max_motor_velocity: self.max_motor_velocity,
+                motor_counts: self.motor_counts,
+                microstep_distance: self.microstep_distance,
+                invert_dir: self.invert_dir,
+                stepper_oids: self.stepper_oids,
+                move_queue_slots: self.move_queue_slots,
+                step_pulse_seconds: self.step_pulse_seconds,
+                stepcompress_max_error_secs: self.stepcompress_max_error_secs,
+                phase_sample_rate: self.phase_sample_rate,
+                phase_ring_depth: self.phase_ring_depth,
+            },
         }
     }
 }
 
+/// One bed mesh as klippy hands it over: the probed grid, the datum the mesh
+/// is zeroed at, the fade band, and the Z envelope the mesh-following demand
+/// is judged against.
+#[derive(FromPyObject)]
+#[pyo3(from_item_all)]
+struct BedMeshRequest {
+    points: Vec<f64>,
+    x_min: f64,
+    y_min: f64,
+    dx: f64,
+    dy: f64,
+    nx: usize,
+    ny: usize,
+    tension: f64,
+    fade: Option<(f64, f64, f64)>,
+    zero_ref_x: f64,
+    zero_ref_y: f64,
+    z_velocity_limit: Option<f64>,
+    z_accel_limit: Option<f64>,
+}
+
+/// The one motor a nudge acts on.
+#[derive(Debug, Clone, Copy, FromPyObject)]
+#[pyo3(from_item_all)]
+struct NudgeTarget {
+    mcu_id: u32,
+    axis_idx: u8,
+    motor_mask: u8,
+}
+
+/// How far and how fast a nudge runs.
+#[derive(Debug, Clone, Copy, FromPyObject)]
+#[pyo3(from_item_all)]
+struct NudgeMotion {
+    delta_mm: f64,
+    speed: f64,
+    accel: f64,
+}
+
+/// A G5 cubic's control handles: the incoming pair (absent on a chained
+/// segment, which reflects the previous one) and the outgoing pair.
+#[derive(Debug, Clone, Copy, FromPyObject)]
+#[pyo3(from_item_all)]
+struct CurveHandles {
+    i: Option<f64>,
+    j: Option<f64>,
+    p: f64,
+    q: f64,
+}
+
+/// One curve segment's endpoint displacement, spatial plus extrusion.
+#[derive(Debug, Clone, Copy, FromPyObject)]
+#[pyo3(from_item_all)]
+struct CurveDisplacement {
+    dx: f64,
+    dy: f64,
+    dz: f64,
+    de: f64,
+}
+
 #[pymethods]
 impl PyMotionEngine {
-    #[pyo3(signature = (mcu_id, axis_idx, motor_mask, delta_mm, speed, accel))]
+    #[pyo3(signature = (target, motion))]
     fn submit_nudge(
         &self,
         py: Python<'_>,
-        mcu_id: u32,
-        axis_idx: u8,
-        motor_mask: u8,
-        delta_mm: f64,
-        speed: f64,
-        accel: f64,
+        target: NudgeTarget,
+        motion: NudgeMotion,
     ) -> PyResult<f64> {
-        require_single_motor_mask(motor_mask).map_err(PyRuntimeError::new_err)?;
-        let profile = trajectory::NudgeProfile::try_new(delta_mm, speed, accel, 0.0)
-            .map_err(|e| PyRuntimeError::new_err(format!("submit_nudge: {e}")))?;
+        require_single_motor_mask(target.motor_mask).map_err(PyRuntimeError::new_err)?;
+        let profile =
+            trajectory::NudgeProfile::try_new(motion.delta_mm, motion.speed, motion.accel, 0.0)
+                .map_err(|e| PyRuntimeError::new_err(format!("submit_nudge: {e}")))?;
         let rx = {
             let guard = self.planner.lock_ok();
             let planner = guard.as_ref().ok_or_else(|| {
@@ -98,12 +146,12 @@ impl PyMotionEngine {
             })?;
             planner
                 .submit_nudge(motion_core::worker::NudgeParams {
-                    mcu_id,
-                    axis: axis_idx,
-                    motor_mask,
-                    delta_mm,
-                    speed,
-                    accel,
+                    mcu_id: target.mcu_id,
+                    axis: target.axis_idx,
+                    motor_mask: target.motor_mask,
+                    delta_mm: motion.delta_mm,
+                    speed: motion.speed,
+                    accel: motion.accel,
                 })
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
         };
@@ -184,7 +232,7 @@ impl PyMotionEngine {
                 }
             };
             let pos = self.commanded_pos.lock_ok().0;
-            let (max_v, max_a, corner_deviation, jerk) = {
+            let (max_v, max_a, corner_deviation) = {
                 let cfg = self.planner_config.lock_ok();
                 let (mut v, mut a) = cfg.cartesian.for_move(dx, dy, dz);
                 if let Some(rv) = cfg.runtime_caps.velocity {
@@ -193,14 +241,11 @@ impl PyMotionEngine {
                 if let Some(ra) = cfg.runtime_caps.accel {
                     a = a.min(ra);
                 }
-                let j = cfg
-                    .runtime_caps
-                    .jerk_override
-                    .unwrap_or(cfg.cartesian.max_jerk);
-                (v, a, cfg.corner_deviation(), j)
+                (v, a, cfg.corner_deviation())
             };
-            let limits = geometry::VelocityLimits::try_new(max_v, max_a, corner_deviation, jerk)
-                .map_err(PyRuntimeError::new_err)?;
+            let limits =
+                geometry::VelocityLimits::try_new(max_v, max_a, corner_deviation, f64::INFINITY)
+                    .map_err(PyRuntimeError::new_err)?;
             let line_no = self.move_seq.fetch_add(1, Ordering::Relaxed) as u32;
             let m = classify::build_move(
                 pos,
@@ -241,31 +286,25 @@ impl PyMotionEngine {
         })
     }
 
-    #[pyo3(signature = (i, j, p, q, dx, dy, dz, de, feedrate))]
+    #[pyo3(signature = (handles, displacement, feedrate))]
     fn submit_bezier(
         &self,
         py: Python<'_>,
-        i: Option<f64>,
-        j: Option<f64>,
-        p: f64,
-        q: f64,
-        dx: f64,
-        dy: f64,
-        dz: f64,
-        de: f64,
+        handles: CurveHandles,
+        displacement: CurveDisplacement,
         feedrate: f64,
     ) -> PyResult<()> {
         tracing::debug!(
             subsystem = "motion",
             event = "submit_bezier_enter",
-            i = ?i,
-            j = ?j,
-            p,
-            q,
-            dx,
-            dy,
-            dz,
-            de,
+            i = ?handles.i,
+            j = ?handles.j,
+            p = handles.p,
+            q = handles.q,
+            dx = displacement.dx,
+            dy = displacement.dy,
+            dz = displacement.dz,
+            de = displacement.de,
             feedrate,
             "engine.submit_bezier enter"
         );
@@ -276,16 +315,13 @@ impl PyMotionEngine {
              faceting is a follow-up. Slice without G5.",
         )
     }
-    #[pyo3(signature = (i, j, dx, dy, dz, de, feedrate))]
+    #[pyo3(signature = (i, j, displacement, feedrate))]
     fn submit_quadratic(
         &self,
         py: Python<'_>,
         i: f64,
         j: f64,
-        dx: f64,
-        dy: f64,
-        dz: f64,
-        de: f64,
+        displacement: CurveDisplacement,
         feedrate: f64,
     ) -> PyResult<()> {
         tracing::debug!(
@@ -293,10 +329,10 @@ impl PyMotionEngine {
             event = "submit_quadratic_enter",
             i,
             j,
-            dx,
-            dy,
-            dz,
-            de,
+            dx = displacement.dx,
+            dy = displacement.dy,
+            dz = displacement.dz,
+            de = displacement.de,
             feedrate,
             "engine.submit_quadratic enter"
         );
@@ -351,12 +387,6 @@ impl PyMotionEngine {
         self.planner_config.lock_ok().runtime_caps.accel = accel;
         Ok(())
     }
-    #[pyo3(signature = (jerk))]
-    pub(super) fn set_jerk_override(&self, jerk: Option<f64>) -> PyResult<()> {
-        require_supported_jerk_override(jerk).map_err(PyValueError::new_err)?;
-        self.planner_config.lock_ok().runtime_caps.jerk_override = jerk;
-        Ok(())
-    }
     pub(super) fn set_post_processor_bypass(&self, enabled: bool) -> PyResult<()> {
         self.publish_post_processors(|_, bypass| {
             *bypass = enabled;
@@ -386,25 +416,35 @@ impl PyMotionEngine {
             .param(name, key)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn set_bed_mesh(
-        &self,
-        points: Vec<f64>,
-        x_min: f64,
-        y_min: f64,
-        dx: f64,
-        dy: f64,
-        nx: usize,
-        ny: usize,
-        tension: f64,
-        fade: Option<(f64, f64, f64)>,
-        zero_ref_x: f64,
-        zero_ref_y: f64,
-        z_velocity_limit: Option<f64>,
-        z_accel_limit: Option<f64>,
-    ) -> PyResult<(f64, (f64, f64, f64, f64, f64))> {
-        let mut mesh = geometry::MeshGrid::new(x_min, y_min, dx, dy, nx, ny, points, tension)
-            .map_err(|e| PyValueError::new_err(format!("set_bed_mesh: {e}")))?;
+    fn set_bed_mesh(&self, request: BedMeshRequest) -> PyResult<(f64, (f64, f64, f64, f64, f64))> {
+        let BedMeshRequest {
+            points,
+            x_min,
+            y_min,
+            dx,
+            dy,
+            nx,
+            ny,
+            tension,
+            fade,
+            zero_ref_x,
+            zero_ref_y,
+            z_velocity_limit,
+            z_accel_limit,
+        } = request;
+        let mut mesh = geometry::MeshGrid::new(
+            geometry::MeshGridSpec {
+                x_min,
+                y_min,
+                dx,
+                dy,
+                nx,
+                ny,
+                tension,
+            },
+            points,
+        )
+        .map_err(|e| PyValueError::new_err(format!("set_bed_mesh: {e}")))?;
         if !mesh.contains(zero_ref_x, zero_ref_y) {
             return Err(PyValueError::new_err(format!(
                 "set_bed_mesh: zero reference ({zero_ref_x}, {zero_ref_y}) is outside the \

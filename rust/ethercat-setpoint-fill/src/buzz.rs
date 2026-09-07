@@ -9,6 +9,21 @@ pub const ERR_BUZZ_PROFILE: i32 = -4;
 
 pub const MAX_BUZZ_SLOTS: usize = 8;
 
+#[derive(Clone, Copy, Debug)]
+pub struct BuzzRoute {
+    pub slot_mask: u8,
+    pub sign_mask: u8,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BuzzSweep {
+    pub freq_start_millihz: u32,
+    pub freq_end_millihz: u32,
+    pub amplitude_nm: u32,
+    pub duration_ms: u32,
+    pub ramp_ms: u32,
+}
+
 #[derive(Debug)]
 pub struct BuzzOsc {
     profile: Option<BuzzProfile>,
@@ -32,19 +47,24 @@ impl BuzzOsc {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn arm(
         &mut self,
         num_slots: u8,
-        slot_mask: u8,
-        sign_mask: u8,
-        freq_start_millihz: u32,
-        freq_end_millihz: u32,
-        amplitude_nm: u32,
-        duration_ms: u32,
-        ramp_ms: u32,
+        route: BuzzRoute,
+        sweep: BuzzSweep,
         base_counts: [i32; MAX_BUZZ_SLOTS],
     ) -> i32 {
+        let BuzzRoute {
+            slot_mask,
+            sign_mask,
+        } = route;
+        let BuzzSweep {
+            freq_start_millihz,
+            freq_end_millihz,
+            amplitude_nm,
+            duration_ms,
+            ramp_ms,
+        } = sweep;
         self.profile = None;
         let disarm = amplitude_nm == 0 || duration_ms == 0 || slot_mask == 0;
         if disarm {

@@ -9,7 +9,7 @@ use trajectory::{AxisChainSet, ClockedMotorSpan, ContinuousSegment};
 
 use crate::classify::build_move;
 use crate::enqueue::enqueue_segment;
-use crate::mcu_config::McuAxisConfig;
+use crate::mcu_config::{McuAxisConfig, McuHardware};
 use crate::pump::{
     JUNCTION_POSITION_FATAL_MM, JUNCTION_POSITION_LOG_MM, JunctionTracker, MAX_LEAD_SECS,
 };
@@ -46,8 +46,11 @@ fn harness_mcu_configs() -> Vec<McuAxisConfig> {
         ethercat: false,
         mcu_id: HARNESS_MCU_ID,
         axes: vec![0, 1, 2],
-        kinematics: 1,
-        max_motor_velocity: vec![f64::INFINITY; 3],
+        hw: McuHardware {
+            kinematics: 1,
+            max_motor_velocity: vec![f64::INFINITY; 3],
+            ..Default::default()
+        },
         ..Default::default()
     }]
 }
@@ -378,7 +381,7 @@ pub fn collect_shaped_segments_scripted(
 /// the full streaming pipeline and return the shaped segments it emits.
 pub fn collect_shaped_segments_from_script(
     script: Vec<motion_pipeline::StreamInput>,
-    mut config: StreamConfig,
+    config: StreamConfig,
     chains: AxisChainSet,
 ) -> Vec<ContinuousSegment> {
     let spatial_home = script
@@ -390,7 +393,6 @@ pub fn collect_shaped_segments_from_script(
         .map_or([0.0, 0.0, 0.0], |seg| seg.point_at(0.0));
     let mut home = spatial_home.to_vec();
     home.push(0.0);
-    config.corner.ramp_accel_budget_mm_s2 = config.max_extrude_only_accel_mm_s2;
     let mut pipeline = Pipeline::new(config, chains, home, 0.0);
     let mut segs = Vec::new();
     let mut output = |item| {

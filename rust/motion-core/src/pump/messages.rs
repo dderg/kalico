@@ -424,13 +424,17 @@ impl BuzzRoute {
                 sign_mask,
             } => {
                 let result = filler.lock_ok().arm_buzz(
-                    *slot_mask,
-                    *sign_mask,
-                    wave.freq_start_millihz,
-                    wave.freq_end_millihz,
-                    wave.amplitude_nm,
-                    wave.duration_ms,
-                    wave.ramp_ms,
+                    ethercat_setpoint_fill::buzz::BuzzRoute {
+                        slot_mask: *slot_mask,
+                        sign_mask: *sign_mask,
+                    },
+                    ethercat_setpoint_fill::buzz::BuzzSweep {
+                        freq_start_millihz: wave.freq_start_millihz,
+                        freq_end_millihz: wave.freq_end_millihz,
+                        amplitude_nm: wave.amplitude_nm,
+                        duration_ms: wave.duration_ms,
+                        ramp_ms: wave.ramp_ms,
+                    },
                     start.clock,
                 );
                 if result != 0 {

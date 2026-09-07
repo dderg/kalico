@@ -389,13 +389,15 @@ impl McuHostIo {
             );
             let mut reactor = crate::host_io::reactor::Reactor::new_with_clock(
                 io,
-                reactor_parser,
-                submission_rx,
-                reactor_status,
-                identify_seq,
-                reactor_config,
+                crate::host_io::reactor::ReactorSetup {
+                    parser: reactor_parser,
+                    submission_rx,
+                    status_snapshot: reactor_status,
+                    seq: identify_seq,
+                    config: reactor_config,
+                    fire_and_forget_depth: reactor_fire_and_forget_depth,
+                },
                 reactor_clock,
-                reactor_fire_and_forget_depth,
             );
             reactor.run();
             if !reactor.exited_gracefully() {
@@ -471,13 +473,15 @@ impl McuHostIo {
         let reactor_handle = std::thread::spawn(move || {
             let mut reactor = crate::host_io::reactor::Reactor::new_with_clock(
                 io,
-                reactor_parser,
-                submission_rx,
-                reactor_status,
-                identify_seq,
-                reactor_config,
+                crate::host_io::reactor::ReactorSetup {
+                    parser: reactor_parser,
+                    submission_rx,
+                    status_snapshot: reactor_status,
+                    seq: identify_seq,
+                    config: reactor_config,
+                    fire_and_forget_depth: reactor_fire_and_forget_depth,
+                },
                 reactor_clock,
-                reactor_fire_and_forget_depth,
             );
             reactor.run();
         });

@@ -43,9 +43,9 @@ mod telemetry;
 
 use endstop::{TripDeps, dispatch_endstop_trip};
 #[cfg(test)]
-use ethercat_endpoint::{EndpointClaimError, ReportedExecutor, endpoint_args};
+use ethercat_endpoint::{EndpointClaimError, ReportedExecutor, SampleGrid, endpoint_args};
 use ethercat_endpoint::{
-    SampleGrid, arm_endpoint_death_watchdog, build_ring_filler, handshake_ethercat_endpoint,
+    EndpointLaunch, arm_endpoint_death_watchdog, build_ring_filler, handshake_ethercat_endpoint,
     message_for_claim_error, poll_socket_ready, report_endpoint_death, spawn_ethercat_endpoint,
     verify_sample_grid,
 };
@@ -57,8 +57,8 @@ use runtime_caps::{
     require_positive, slots_for_axis,
 };
 use state::{
-    EthercatDrive, FlushState, HomingRun, HomingState, LatchedFaults, McuConnection, PositionPoll,
-    PumpHandles, RemoteFreeze, TripMember,
+    EthercatDrive, EthercatNodeClaim, EthercatRegistration, FlushState, HomingRun, HomingState,
+    LatchedFaults, McuConnection, PositionPoll, PumpHandles, RemoteFreeze, TripMember,
 };
 
 fn abort_after_tracing_appender_drains() {
@@ -297,20 +297,24 @@ impl PyMotionEngine {
         Ok(raw)
     }
 
-    #[pyo3(signature = (label, socket_path, interface, endpoint_binary, cycle_us, dynamics_profile, drives, late_tolerance_us=None, group_delay_us=None))]
-    #[allow(clippy::too_many_arguments)]
     fn claim_ethercat_node(
         &self,
-        label: &str,
-        socket_path: &str,
-        interface: &str,
-        endpoint_binary: &str,
-        cycle_us: u32,
-        dynamics_profile: Option<String>,
+        claim: EthercatNodeClaim,
         drives: Vec<EthercatDrive>,
-        late_tolerance_us: Option<f64>,
-        group_delay_us: Option<f64>,
     ) -> PyResult<u32> {
+        let EthercatNodeClaim {
+            label,
+            socket_path,
+            interface,
+            endpoint_binary,
+            cycle_us,
+            dynamics_profile,
+            late_tolerance_us,
+            group_delay_us,
+        } = claim;
+        let label = label.as_str();
+        let socket_path = socket_path.as_str();
+        let interface = interface.as_str();
         if drives.is_empty() {
             return Err(PyRuntimeError::new_err(format!(
                 "ethercat {label}: claim received no drives"
@@ -330,14 +334,16 @@ impl PyMotionEngine {
 
         let events_dir = self.events_dir.lock_ok().clone();
         let mut child = spawn_ethercat_endpoint(
-            endpoint_binary,
-            interface,
-            socket_path,
-            cycle_us,
-            dynamics_profile.as_deref(),
-            late_tolerance_us,
-            group_delay_us.unwrap_or(f64::from(cycle_us)),
-            events_dir.as_deref(),
+            &endpoint_binary,
+            EndpointLaunch {
+                interface,
+                socket_path,
+                cycle_us,
+                dynamics_profile: dynamics_profile.as_deref(),
+                late_tolerance_us,
+                group_delay_us: group_delay_us.unwrap_or(f64::from(cycle_us)),
+                events_dir: events_dir.as_deref(),
+            },
             &drives,
         )
         .map_err(|e| {
@@ -381,13 +387,15 @@ impl PyMotionEngine {
         drop(router);
         self.register_ethercat_mcu(
             raw,
-            label,
-            socket_path,
-            child,
-            conn,
-            slot_axes,
-            sample_grid,
-            ring_filler,
+            EthercatRegistration {
+                label: label.to_owned(),
+                socket_path: socket_path.to_owned(),
+                child,
+                conn,
+                slot_axes,
+                sample_grid,
+                ring_filler,
+            },
         );
         Ok(raw)
     }
@@ -701,26 +709,25 @@ impl PyMotionEngine {
 }
 
 impl PyMotionEngine {
-    fn register_ethercat_mcu(
-        &self,
-        raw: u32,
-        label: &str,
-        socket_path: &str,
-        child: std::process::Child,
-        conn: McuSerialConn,
-        slot_axes: Vec<usize>,
-        sample_grid: SampleGrid,
-        ring_filler: motion_core::pump::RingFiller,
-    ) {
+    fn register_ethercat_mcu(&self, raw: u32, reg: EthercatRegistration) {
+        let EthercatRegistration {
+            label,
+            socket_path,
+            child,
+            conn,
+            slot_axes,
+            sample_grid,
+            ring_filler,
+        } = reg;
         let ethercat = McuConnection {
-            label: label.to_owned(),
+            label: label.clone(),
             host_io: None,
             runtime_rx_priority: None,
             runtime_rx_bulk: None,
             runtime_caps: None,
             identify_caps: 0,
             mcu_transport_supported: true,
-            ethercat_socket: Some(socket_path.to_owned()),
+            ethercat_socket: Some(socket_path),
             endpoint_process: Some(child),
             endpoint_conn: Some(Arc::new(conn)),
             ethercat_slot_axes: slot_axes,

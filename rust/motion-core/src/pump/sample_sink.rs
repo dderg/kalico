@@ -116,7 +116,7 @@ pub fn build_sample_endpoint(
             cfg.mcu_id
         ));
     }
-    let rate = cfg.phase_sample_rate;
+    let rate = cfg.hw.phase_sample_rate;
     if !rate.is_finite() || rate <= 0.0 || rate > f64::from(u32::MAX) {
         return Err(format!(
             "sample mcu {}: phase sample rate {rate} Hz is not a representable positive rate",
@@ -131,7 +131,7 @@ pub fn build_sample_endpoint(
             continue;
         }
         let motor = cfg.motor_range(lane).start;
-        let quantum = cfg.microstep_distance[motor];
+        let quantum = cfg.hw.microstep_distance[motor];
         if !quantum.is_finite() || quantum <= 0.0 {
             return Err(format!(
                 "sample mcu {} axis {axis}: position quantum {quantum} mm is not a positive length",
@@ -159,12 +159,12 @@ pub fn build_sample_endpoint(
         #[allow(clippy::cast_possible_truncation)]
         lanes.push(SampleLaneConfig {
             axis: axis as u8,
-            oid: cfg.stepper_oids[motor],
+            oid: cfg.hw.stepper_oids[motor],
             cycles_per_second: measured_clock_freq,
             sample_rate_hz,
             position_quantum_mm: quantum as f32,
             max_units_per_sample,
-            ring_depth: cfg.phase_ring_depth,
+            ring_depth: cfg.hw.phase_ring_depth,
         });
     }
     if lanes.is_empty() {

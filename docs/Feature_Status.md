@@ -24,7 +24,7 @@ Three tiers, honestly applied:
 | Structured logging / crash forensics | **solid** |
 | Step/dir motor path | **solid** |
 | Phase stepping | **verified in sim (2026-07)**; not recently exercised on real hardware |
-| Explicit `max_jerk` as a first-class limit | **exploratory** — enforced, but whether it earns its keep next to smoothing kernels is open |
+| Explicit `max_jerk` as a first-class limit | **not implemented** — the option still parses, but only `max_jerk: 0` (unlimited) is accepted; a finite jerk limit is rejected at config load |
 | Kinematics beyond cartesian / corexy | **exploratory** |
 | Per-axis-group limit model | **exploratory** |
 | CAN bus micro-controllers | **verified on the test bench (2026-07)**; never driven a real print |

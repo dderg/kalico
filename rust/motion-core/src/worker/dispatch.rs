@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use trajectory::{ContinuousSegment, NudgeProfile};
 
-use motion_pipeline::{BarrierAck, Control, TrajectoryItem};
+use motion_pipeline::{BarrierAck, Control, DispatchCommand, TrajectoryItem};
 
 use super::{CommittedFrontier, fatal};
 
@@ -79,7 +79,8 @@ impl WorkerLinks {
                 && matches!(item, TrajectoryItem::Seg(_)))
             || !matches!(
                 item,
-                TrajectoryItem::Seg(_) | TrajectoryItem::Control(Control::Nudge { .. })
+                TrajectoryItem::Seg(_)
+                    | TrajectoryItem::Control(Control::Dispatch(DispatchCommand::Nudge { .. }))
             )
     }
 }
@@ -169,7 +170,7 @@ impl Dispatcher {
 
     fn handle_control(&mut self, ctrl: Control, sink: &mut impl SegmentSink) {
         match ctrl {
-            Control::Barrier(tx) => {
+            Control::Dispatch(DispatchCommand::Barrier(tx)) => {
                 let ack = BarrierAck {
                     dispatched_through: self.dispatched_through,
                     result: self
@@ -197,12 +198,12 @@ impl Dispatcher {
                         .store(t.to_bits(), Ordering::Release);
                 }
             }
-            Control::Nudge {
+            Control::Dispatch(DispatchCommand::Nudge {
                 mcu_id,
                 axis,
                 motor_mask,
                 profile,
-            } => self.handle_nudge(mcu_id, axis, motor_mask, &profile, sink),
+            }) => self.handle_nudge(mcu_id, axis, motor_mask, &profile, sink),
             Control::SetAxisChains(_) | Control::SetMesh { .. } => {}
         }
     }

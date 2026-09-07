@@ -194,7 +194,20 @@ fn a_buzz_streams_through_the_same_runs() {
     let mut f = filler(2);
     let start = GRID_CLOCK + INTERVAL * 400;
     assert_eq!(
-        f.arm_buzz(0b01, 0, 40_000, 40_000, 20_000, 500, 5, start),
+        f.arm_buzz(
+            BuzzRoute {
+                slot_mask: 0b01,
+                sign_mask: 0
+            },
+            BuzzSweep {
+                freq_start_millihz: 40_000,
+                freq_end_millihz: 40_000,
+                amplitude_nm: 20_000,
+                duration_ms: 500,
+                ramp_ms: 5
+            },
+            start,
+        ),
         0
     );
     assert!(f.buzz_active());
@@ -221,7 +234,20 @@ fn a_buzz_opens_on_the_first_grid_cycle_at_or_after_the_pump_anchor() {
     let mut f = filler(1);
     let start = GRID_CLOCK + INTERVAL * 400 + 1;
     assert_eq!(
-        f.arm_buzz(0b01, 0, 40_000, 40_000, 20_000, 500, 5, start),
+        f.arm_buzz(
+            BuzzRoute {
+                slot_mask: 0b01,
+                sign_mask: 0
+            },
+            BuzzSweep {
+                freq_start_millihz: 40_000,
+                freq_end_millihz: 40_000,
+                amplitude_nm: 20_000,
+                duration_ms: 500,
+                ramp_ms: 5
+            },
+            start,
+        ),
         0
     );
     let runs = f.drain().expect("buzz fill");
@@ -239,7 +265,20 @@ fn a_buzz_is_refused_while_any_lane_still_has_trajectory_queued() {
         .expect("stage trajectory on the lane the sweep leaves alone");
     let start = GRID_CLOCK + INTERVAL * 400;
     assert_eq!(
-        f.arm_buzz(0b01, 0, 40_000, 40_000, 20_000, 500, 5, start),
+        f.arm_buzz(
+            BuzzRoute {
+                slot_mask: 0b01,
+                sign_mask: 0
+            },
+            BuzzSweep {
+                freq_start_millihz: 40_000,
+                freq_end_millihz: 40_000,
+                amplitude_nm: 20_000,
+                duration_ms: 500,
+                ramp_ms: 5
+            },
+            start,
+        ),
         crate::buzz::ERR_BUZZ_STREAMING,
         "a sweep suppresses every undriven lane, so it may not swallow queued motion"
     );
@@ -256,7 +295,20 @@ fn an_undriven_lane_cannot_pull_the_buzz_anchor_earlier() {
     assert!(!f.wants_drain());
     let start = GRID_CLOCK + INTERVAL * 400;
     assert_eq!(
-        f.arm_buzz(0b01, 0, 40_000, 40_000, 20_000, 500, 5, start),
+        f.arm_buzz(
+            BuzzRoute {
+                slot_mask: 0b01,
+                sign_mask: 0
+            },
+            BuzzSweep {
+                freq_start_millihz: 40_000,
+                freq_end_millihz: 40_000,
+                amplitude_nm: 20_000,
+                duration_ms: 500,
+                ramp_ms: 5
+            },
+            start,
+        ),
         0
     );
     let runs = f.drain().expect("buzz fill");
@@ -288,11 +340,37 @@ fn one_anchor_starts_every_transport_on_the_same_instant() {
         .observe_grid(skewed_index, skewed_clock)
         .expect("the grid only advances");
     assert_eq!(
-        early.arm_buzz(0b01, 0, 40_000, 40_000, 20_000, 500, 5, anchor),
+        early.arm_buzz(
+            BuzzRoute {
+                slot_mask: 0b01,
+                sign_mask: 0
+            },
+            BuzzSweep {
+                freq_start_millihz: 40_000,
+                freq_end_millihz: 40_000,
+                amplitude_nm: 20_000,
+                duration_ms: 500,
+                ramp_ms: 5
+            },
+            anchor,
+        ),
         0
     );
     assert_eq!(
-        skewed.arm_buzz(0b01, 0, 40_000, 40_000, 20_000, 500, 5, anchor),
+        skewed.arm_buzz(
+            BuzzRoute {
+                slot_mask: 0b01,
+                sign_mask: 0
+            },
+            BuzzSweep {
+                freq_start_millihz: 40_000,
+                freq_end_millihz: 40_000,
+                amplitude_nm: 20_000,
+                duration_ms: 500,
+                ramp_ms: 5
+            },
+            anchor,
+        ),
         0
     );
     let early_start = early.drain().expect("buzz fill")[0].start_index;
@@ -319,7 +397,20 @@ fn a_buzz_is_refused_before_the_endpoint_grid_is_known() {
     }];
     let mut f = ChainFiller::new(&specs, None, INTERVAL, 400);
     assert_eq!(
-        f.arm_buzz(0b01, 0, 40_000, 40_000, 20_000, 500, 5, GRID_CLOCK),
+        f.arm_buzz(
+            BuzzRoute {
+                slot_mask: 0b01,
+                sign_mask: 0
+            },
+            BuzzSweep {
+                freq_start_millihz: 40_000,
+                freq_end_millihz: 40_000,
+                amplitude_nm: 20_000,
+                duration_ms: 500,
+                ramp_ms: 5
+            },
+            GRID_CLOCK,
+        ),
         ERR_BUZZ_UNGRIDDED_START
     );
     assert!(!f.buzz_active(), "a refused arming leaves nothing armed");
@@ -329,7 +420,20 @@ fn a_buzz_is_refused_before_the_endpoint_grid_is_known() {
 fn a_buzz_anchored_before_the_observed_grid_is_refused() {
     let mut f = filler(1);
     assert_eq!(
-        f.arm_buzz(0b01, 0, 40_000, 40_000, 20_000, 500, 5, GRID_CLOCK - 1),
+        f.arm_buzz(
+            BuzzRoute {
+                slot_mask: 0b01,
+                sign_mask: 0
+            },
+            BuzzSweep {
+                freq_start_millihz: 40_000,
+                freq_end_millihz: 40_000,
+                amplitude_nm: 20_000,
+                duration_ms: 500,
+                ramp_ms: 5
+            },
+            GRID_CLOCK - 1,
+        ),
         ERR_BUZZ_START_IN_PAST
     );
     assert!(!f.buzz_active());
@@ -577,7 +681,20 @@ fn a_reconfiguration_is_refused_until_the_grid_passes_the_samples_emitted() {
 fn a_buzz_blocks_a_reconfiguration_for_its_whole_sweep() {
     let mut f = filler(1);
     assert_eq!(
-        f.arm_buzz(0b01, 0, 40_000, 40_000, 20_000, 500, 5, GRID_CLOCK),
+        f.arm_buzz(
+            BuzzRoute {
+                slot_mask: 0b01,
+                sign_mask: 0
+            },
+            BuzzSweep {
+                freq_start_millihz: 40_000,
+                freq_end_millihz: 40_000,
+                amplitude_nm: 20_000,
+                duration_ms: 500,
+                ramp_ms: 5
+            },
+            GRID_CLOCK,
+        ),
         0
     );
     assert_eq!(f.set_ff_lead(0, INTERVAL), ERR_RECONFIG_STREAMING);

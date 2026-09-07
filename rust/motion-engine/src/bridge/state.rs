@@ -374,3 +374,29 @@ pub(crate) struct EthercatDrive {
     pub(crate) invert_direction: bool,
     pub(crate) dynamics_profile: Option<String>,
 }
+
+/// Everything `[ethercat_node]` decides about the endpoint process itself,
+/// extracted by attribute from the Python `EthercatNodeClaim` namedtuple.
+#[derive(Debug, Clone, pyo3::FromPyObject)]
+pub(crate) struct EthercatNodeClaim {
+    pub(crate) label: String,
+    pub(crate) socket_path: String,
+    pub(crate) interface: String,
+    pub(crate) endpoint_binary: String,
+    pub(crate) cycle_us: u32,
+    pub(crate) dynamics_profile: Option<String>,
+    pub(crate) late_tolerance_us: Option<f64>,
+    pub(crate) group_delay_us: Option<f64>,
+}
+
+/// A claimed EtherCAT endpoint's live resources, handed to the engine's MCU
+/// table once the handshake and the sample grid have been accepted.
+pub(crate) struct EthercatRegistration {
+    pub(crate) label: String,
+    pub(crate) socket_path: String,
+    pub(crate) child: std::process::Child,
+    pub(crate) conn: McuSerialConn,
+    pub(crate) slot_axes: Vec<usize>,
+    pub(crate) sample_grid: super::ethercat_endpoint::SampleGrid,
+    pub(crate) ring_filler: motion_core::pump::RingFiller,
+}

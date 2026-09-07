@@ -224,13 +224,17 @@ impl ReactorHarness {
         let clock_dyn: Arc<dyn Clock> = clock.clone();
         let reactor = Reactor::new_with_clock(
             SerialFrameIo::new(port),
-            parser,
-            submission_rx,
-            status_snapshot,
-            seq,
-            config,
+            crate::host_io::reactor::ReactorSetup {
+                parser,
+                submission_rx,
+                status_snapshot,
+                seq,
+                config,
+                fire_and_forget_depth: Arc::new(
+                    crate::host_io::fire_and_forget_depth::FireAndForgetDepth::default(),
+                ),
+            },
             clock_dyn,
-            Arc::new(crate::host_io::fire_and_forget_depth::FireAndForgetDepth::default()),
         );
         Self {
             reactor,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::mcu_config::{LaneKind, McuAxisConfig, StepcompressEncoder};
+use crate::mcu_config::{LaneKind, McuAxisConfig, McuHardware, StepcompressEncoder};
 use crate::pump::pump_past_guard_secs;
 use host_rt::clock::{Clock, MockClock};
 use host_rt::passthrough_queue::PassthroughRouter;
@@ -21,20 +21,22 @@ fn stepcompress_cfg() -> McuAxisConfig {
     McuAxisConfig {
         mcu_id: MCU_ID,
         axes: vec![0],
-        kinematics: 0,
-        max_motor_velocity: vec![200.0],
         ethercat: false,
         lane_kinds: vec![LaneKind::Pulse],
-        motor_counts: vec![1],
-        microstep_distance: vec![0.01],
-        invert_dir: vec![false],
-        stepper_oids: vec![7],
-        move_queue_slots: 128,
-        step_pulse_seconds: vec![0.000_002],
         stepcompress_encoders: vec![StepcompressEncoder::HighPrecision],
-        phase_sample_rate: 0.0,
-        phase_ring_depth: 0,
-        stepcompress_max_error_secs: 0.0,
+        hw: McuHardware {
+            kinematics: 0,
+            max_motor_velocity: vec![200.0],
+            motor_counts: vec![1],
+            microstep_distance: vec![0.01],
+            invert_dir: vec![false],
+            stepper_oids: vec![7],
+            move_queue_slots: 128,
+            step_pulse_seconds: vec![0.000_002],
+            phase_sample_rate: 0.0,
+            phase_ring_depth: 0,
+            stepcompress_max_error_secs: 0.0,
+        },
     }
 }
 
@@ -278,20 +280,22 @@ fn a_retimed_reanchor_reseeds_moving_lanes_but_never_idle_hold_lanes() {
     sink.mcu_configs.push(crate::mcu_config::McuAxisConfig {
         mcu_id: 1,
         axes: vec![3],
-        kinematics: 0,
-        max_motor_velocity: vec![200.0],
         ethercat: false,
         lane_kinds: vec![LaneKind::Pulse],
-        motor_counts: vec![1],
-        microstep_distance: vec![0.01],
-        invert_dir: vec![false],
-        stepper_oids: vec![8],
-        move_queue_slots: 128,
-        step_pulse_seconds: vec![0.000_002],
         stepcompress_encoders: vec![StepcompressEncoder::HighPrecision],
-        phase_sample_rate: 0.0,
-        phase_ring_depth: 0,
-        stepcompress_max_error_secs: 0.0,
+        hw: McuHardware {
+            kinematics: 0,
+            max_motor_velocity: vec![200.0],
+            motor_counts: vec![1],
+            microstep_distance: vec![0.01],
+            invert_dir: vec![false],
+            stepper_oids: vec![8],
+            move_queue_slots: 128,
+            step_pulse_seconds: vec![0.000_002],
+            phase_sample_rate: 0.0,
+            phase_ring_depth: 0,
+            stepcompress_max_error_secs: 0.0,
+        },
     });
     let segment = segment_with_axes(vec![
         moving_axis(5.0, 10.0),

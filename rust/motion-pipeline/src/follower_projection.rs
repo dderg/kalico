@@ -10,8 +10,9 @@ use trajectory::{
 
 use crate::lowering::{FitTol, follower_tol_scale};
 use crate::shaper::{
-    AxisSignalTable, SEGMENT_TIME_EPS_S, ShiftedTrackSignal, TrackSignal, analytic_phase_boundary,
-    apply_derivative_gains_to_track, fit_axis_from_signal, shaped_signal_breakpoints,
+    AxisFit, AxisSignalTable, FitBoundary, Lookahead, SEGMENT_TIME_EPS_S, ShiftedTrackSignal,
+    SignalBounds, TrackSignal, apply_derivative_gains_to_track, fit_axis_from_signal,
+    shaped_signal_breakpoints,
 };
 use crate::types::PostProcessError;
 
@@ -99,16 +100,31 @@ struct SourceProjection {
     input_end: Pvaj4,
 }
 
-fn fit_source_projection(
-    shaped: &ContinuousSegment,
-    raw: &ContinuousSegment,
+/// One raw segment's follower projection inputs: the shaped leader signal it
+/// rides, its own raw track, and where on the shaped path it starts.
+#[derive(Clone, Copy)]
+struct FollowerSource<'a> {
+    shaped: &'a ContinuousSegment,
+    raw: &'a ContinuousSegment,
     axis: usize,
-    leaders: &[usize],
-    state: &FollowerState,
+    leaders: &'a [usize],
+    state: &'a FollowerState,
     s_start: f64,
+}
+
+fn fit_source_projection(
+    source: FollowerSource,
     fit_tol: FitTol,
     leading_stage: Option<&ChainStage>,
 ) -> Result<SourceProjection, PostProcessError> {
+    let FollowerSource {
+        shaped,
+        raw,
+        axis,
+        leaders,
+        state,
+        s_start,
+    } = source;
     let raw_axis = &raw.axes[axis];
     let (t_start, t_end) = projection_support(raw, shaped, axis, leaders);
     let sig = FollowerSignal::new(shaped, raw, axis, leaders, state, s_start, 0.0);
@@ -126,29 +142,29 @@ fn fit_source_projection(
             u_end: t_end,
             coeffs: vec![value, value],
         }])
-    } else if let Some(stage) = leading_stage {
-        fit_axis_from_signal(
-            axis,
-            t_start,
-            t_end,
-            &breakpoints.fit_seeds,
-            &AdvancedFollowerSignal {
-                source: &sig,
-                stage,
-            },
-            tolerance,
-            "advanced_follower_source",
-        )?
     } else {
-        fit_axis_from_signal(
+        let fit = AxisFit {
             axis,
             t_start,
             t_end,
-            &breakpoints.fit_seeds,
-            &sig,
-            tolerance,
-            "follower_source",
-        )?
+            seed_breakpoints: &breakpoints.fit_seeds,
+            fit_tol: tolerance,
+            fit_context: if leading_stage.is_some() {
+                "advanced_follower_source"
+            } else {
+                "follower_source"
+            },
+        };
+        match leading_stage {
+            Some(stage) => fit_axis_from_signal(
+                fit,
+                &AdvancedFollowerSignal {
+                    source: &sig,
+                    stage,
+                },
+            )?,
+            None => fit_axis_from_signal(fit, &sig)?,
+        }
     };
     let e_end_relative = sig.eval(t_end);
     Ok(SourceProjection {
@@ -161,18 +177,33 @@ fn fit_source_projection(
     })
 }
 
+/// One emit window's projection inputs: the raw segments, the shaped leader
+/// frontier they ride, and the chains and tolerance the followers are fitted
+/// with.
+#[derive(Clone, Copy)]
+pub(crate) struct ProjectionWindow<'a> {
+    pub base: &'a [ContinuousSegment],
+    pub frontier: &'a [ContinuousSegment],
+    pub chains: &'a AxisChainSet,
+    pub fit_tol: FitTol,
+    pub lookahead: Lookahead,
+}
+
 pub(crate) fn project_followers(
-    base: &[ContinuousSegment],
-    frontier: &[ContinuousSegment],
+    window: ProjectionWindow,
     out: &mut [ContinuousSegment],
-    commit_count: usize,
-    force: bool,
-    chains: &AxisChainSet,
-    fit_tol: FitTol,
     states: &mut Vec<FollowerState>,
     timing: &mut ProjectionTiming,
 ) -> Result<(), PostProcessError> {
-    assert!(frontier.len() >= commit_count && out.len() == commit_count);
+    let ProjectionWindow {
+        base,
+        frontier,
+        chains,
+        fit_tol,
+        lookahead,
+    } = window;
+    let commit_count = out.len();
+    assert!(frontier.len() >= commit_count);
     if states.len() < chains.n_axes() {
         states.resize_with(chains.n_axes(), FollowerState::default);
     }
@@ -253,12 +284,14 @@ pub(crate) fn project_followers(
                                 done.push((
                                     index,
                                     fit_source_projection(
-                                        &frontier[index],
-                                        &base[index],
-                                        axis,
-                                        leaders,
-                                        state_ref,
-                                        s_start,
+                                        FollowerSource {
+                                            shaped: &frontier[index],
+                                            raw: &base[index],
+                                            axis,
+                                            leaders,
+                                            state: state_ref,
+                                            s_start,
+                                        },
                                         fit_tol,
                                         leading_stage,
                                     ),
@@ -279,12 +312,14 @@ pub(crate) fn project_followers(
                     (
                         index,
                         fit_source_projection(
-                            &frontier[index],
-                            &base[index],
-                            axis,
-                            leaders,
-                            state_ref,
-                            s_start,
+                            FollowerSource {
+                                shaped: &frontier[index],
+                                raw: &base[index],
+                                axis,
+                                leaders,
+                                state: state_ref,
+                                s_start,
+                            },
                             fit_tol,
                             leading_stage,
                         ),
@@ -410,7 +445,7 @@ pub(crate) fn project_followers(
                 if need_lo < first_t && state.projected_trimmed {
                     return Err(PostProcessError::MissingHistory { axis, t: need_lo });
                 }
-                if need_hi > last_t && !force {
+                if need_hi > last_t && !lookahead.clamps_past_signal() {
                     return Err(PostProcessError::MissingLookahead { axis, t: need_hi });
                 }
                 let mut input_pieces = Vec::new();
@@ -514,10 +549,16 @@ pub(crate) fn project_followers(
                 let table = Arc::new(
                     AxisSignalTable::from_tracks(
                         std::iter::once(&kernel_input),
-                        first_t,
-                        last_t,
-                        !state.projected_trimmed,
-                        force,
+                        SignalBounds {
+                            first_t,
+                            last_t,
+                            boundary: if state.projected_trimmed {
+                                FitBoundary::Interior
+                            } else {
+                                FitBoundary::StreamBoundary
+                            },
+                            lookahead,
+                        },
                     )
                     .with_piece_moments(kernel_degree),
                 );
@@ -554,7 +595,11 @@ pub(crate) fn project_followers(
                     .map(|i| follower_tol_scale(&base[i].followers, axis))
                     .fold(1.0, f64::min);
                 let target_tol = follower_fit_tol(fit_tol, tol_scale);
-                let monotone_output = nonnegative_demand && !gained_input;
+                let output_monotonicity = if nonnegative_demand && !gained_input {
+                    OutputMonotonicity::Enforced
+                } else {
+                    OutputMonotonicity::Free
+                };
                 let kernel_started = crate::timing::stopwatch();
                 timing.kernel_fits += supports.len();
                 let workers = if cfg!(target_arch = "wasm32") {
@@ -594,7 +639,7 @@ pub(crate) fn project_followers(
                                                 shaped_breaks,
                                                 &sig,
                                                 target_tol,
-                                                monotone_output,
+                                                output_monotonicity,
                                             ),
                                         ));
                                     }
@@ -623,7 +668,7 @@ pub(crate) fn project_followers(
                                     &shaped_breaks,
                                     &sig,
                                     target_tol,
-                                    monotone_output,
+                                    output_monotonicity,
                                 ),
                             )
                         })
@@ -758,6 +803,15 @@ pub(crate) fn project_followers(
     Ok(())
 }
 
+/// Whether a fitted follower output must be corrected back to monotone: a
+/// nonnegative extrusion demand may never emit a retraction, but a track the
+/// derivative-gain stages have already shaped legitimately reverses.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OutputMonotonicity {
+    Enforced,
+    Free,
+}
+
 fn fit_kernel_window<S: TrackSignal>(
     axis: usize,
     start: f64,
@@ -765,22 +819,24 @@ fn fit_kernel_window<S: TrackSignal>(
     shaped_breaks: &[f64],
     sig: &S,
     target_tol: FitTol,
-    monotone_output: bool,
+    monotonicity: OutputMonotonicity,
 ) -> Result<(f64, Vec<BezierPiece>, u128), PostProcessError> {
     let started = crate::timing::stopwatch();
     let local_base = TrackSignal::eval(sig, start);
     let local = ShiftedTrackSignal::new(sig, local_base);
     let track = fit_axis_from_signal(
-        axis,
-        start,
-        end,
-        shaped_breaks,
+        AxisFit {
+            axis,
+            t_start: start,
+            t_end: end,
+            seed_breakpoints: shaped_breaks,
+            fit_tol: target_tol,
+            fit_context: "follower_kernel",
+        },
         &local,
-        target_tol,
-        "follower_kernel",
     )?;
     let mut pieces = extract_bezier_pieces(&track);
-    if monotone_output {
+    if monotonicity == OutputMonotonicity::Enforced {
         project_monotone(axis, "shaped output", &mut pieces, target_tol);
     }
     Ok((local_base, pieces, started.elapsed_us()))
@@ -1188,12 +1244,7 @@ fn axis_breakpoints(axis: &ContinuousAxis) -> Vec<f64> {
         ContinuousAxis::Analytic { span, .. } => {
             let mut breaks = Vec::with_capacity(span.phases.len() + 2);
             breaks.push(span.t_start);
-            breaks.extend(
-                span.phases
-                    .iter()
-                    .take(span.phases.len().saturating_sub(1))
-                    .map(|phase| analytic_phase_boundary(span.t_start, phase.end_time())),
-            );
+            breaks.extend(span.phase_seam_times());
             breaks.push(span.t_end);
             breaks
         }
@@ -1225,13 +1276,15 @@ fn fit_continuous_axis(
 ) -> Result<ScalarNurbs, PostProcessError> {
     let breakpoints = axis_breakpoints(axis);
     fit_axis_from_signal(
-        axis_index,
-        t_start,
-        t_end,
-        &breakpoints,
+        AxisFit {
+            axis: axis_index,
+            t_start,
+            t_end,
+            seed_breakpoints: &breakpoints,
+            fit_tol,
+            fit_context: "follower_axis",
+        },
         &AxisSignal { axis, base },
-        fit_tol,
-        "follower_axis",
     )
 }
 
@@ -2243,20 +2296,7 @@ fn integrate(f: &impl Fn(f64) -> f64, a: f64, b: f64) -> f64 {
     if b - a <= 0.0 {
         return 0.0;
     }
-    let m = 0.5 * (a + b);
-    let (fa, fm, fb) = (f(a), f(m), f(b));
-    let whole = (b - a) / 6.0 * (fa + 4.0 * fm + fb);
-    adaptive_simpson(
-        f,
-        a,
-        b,
-        fa,
-        fm,
-        fb,
-        whole,
-        INTEGRAL_TOL_MM,
-        INTEGRAL_MAX_DEPTH,
-    )
+    adaptive_simpson(f, SimpsonNode::root(f, a, b))
 }
 
 /// `integrate`, but the converged leaves of the adaptive recursion are kept
@@ -2275,28 +2315,14 @@ fn integrate_recording(
     if b - a <= 0.0 {
         return;
     }
-    let m = 0.5 * (a + b);
-    let (fa, fm, fb) = (f(a), f(m), f(b));
-    let whole = (b - a) / 6.0 * (fa + 4.0 * fm + fb);
-    adaptive_simpson_recording(
-        f,
-        a,
-        b,
-        fa,
-        fm,
-        fb,
-        whole,
-        INTEGRAL_TOL_MM,
-        INTEGRAL_MAX_DEPTH,
-        acc,
-        dense_t,
-        dense_s,
-    );
+    adaptive_simpson_recording(f, SimpsonNode::root(f, a, b), acc, dense_t, dense_s);
 }
 
-#[allow(clippy::too_many_arguments)]
-fn adaptive_simpson_recording(
-    f: &impl Fn(f64) -> f64,
+/// One node of the adaptive Simpson tree: the interval, the three samples
+/// the parent already paid for, the parent's estimate over it, and the error
+/// budget and depth left to it.
+#[derive(Clone, Copy)]
+struct SimpsonNode {
     a: f64,
     b: f64,
     fa: f64,
@@ -2305,75 +2331,107 @@ fn adaptive_simpson_recording(
     whole: f64,
     tol: f64,
     depth: u32,
+}
+
+/// One evaluation of a node: either it converged to a value, or it produced
+/// the two halves that must be refined.
+enum SimpsonStep {
+    Converged(f64),
+    Refine {
+        left: SimpsonNode,
+        right: SimpsonNode,
+    },
+}
+
+impl SimpsonNode {
+    fn root(f: &impl Fn(f64) -> f64, a: f64, b: f64) -> Self {
+        let m = 0.5 * (a + b);
+        let (fa, fm, fb) = (f(a), f(m), f(b));
+        let whole = (b - a) / 6.0 * (fa + 4.0 * fm + fb);
+        Self {
+            a,
+            b,
+            fa,
+            fm,
+            fb,
+            whole,
+            tol: INTEGRAL_TOL_MM,
+            depth: INTEGRAL_MAX_DEPTH,
+        }
+    }
+
+    fn step(self, f: &impl Fn(f64) -> f64) -> SimpsonStep {
+        let Self {
+            a,
+            b,
+            fa,
+            fm,
+            fb,
+            whole,
+            tol,
+            depth,
+        } = self;
+        let m = 0.5 * (a + b);
+        let (lm, rm) = (0.5 * (a + m), 0.5 * (m + b));
+        let (flm, frm) = (f(lm), f(rm));
+        let left = (m - a) / 6.0 * (fa + 4.0 * flm + fm);
+        let right = (b - m) / 6.0 * (fm + 4.0 * frm + fb);
+        let delta = left + right - whole;
+        if depth == 0 || delta.abs() <= 15.0 * tol {
+            return SimpsonStep::Converged(left + right + delta / 15.0);
+        }
+        SimpsonStep::Refine {
+            left: Self {
+                a,
+                b: m,
+                fa,
+                fm: flm,
+                fb: fm,
+                whole: left,
+                tol: 0.5 * tol,
+                depth: depth - 1,
+            },
+            right: Self {
+                a: m,
+                b,
+                fa: fm,
+                fm: frm,
+                fb,
+                whole: right,
+                tol: 0.5 * tol,
+                depth: depth - 1,
+            },
+        }
+    }
+}
+
+fn adaptive_simpson_recording(
+    f: &impl Fn(f64) -> f64,
+    node: SimpsonNode,
     acc: &mut f64,
     dense_t: &mut Vec<f64>,
     dense_s: &mut Vec<f64>,
 ) {
-    let m = 0.5 * (a + b);
-    let (lm, rm) = (0.5 * (a + m), 0.5 * (m + b));
-    let (flm, frm) = (f(lm), f(rm));
-    let left = (m - a) / 6.0 * (fa + 4.0 * flm + fm);
-    let right = (b - m) / 6.0 * (fm + 4.0 * frm + fb);
-    let delta = left + right - whole;
-    if depth == 0 || delta.abs() <= 15.0 * tol {
-        *acc += left + right + delta / 15.0;
-        dense_t.push(b);
-        dense_s.push(*acc);
-        return;
-    }
-    adaptive_simpson_recording(
-        f,
-        a,
-        m,
-        fa,
-        flm,
-        fm,
-        left,
-        0.5 * tol,
-        depth - 1,
-        acc,
-        dense_t,
-        dense_s,
-    );
-    adaptive_simpson_recording(
-        f,
-        m,
-        b,
-        fm,
-        frm,
-        fb,
-        right,
-        0.5 * tol,
-        depth - 1,
-        acc,
-        dense_t,
-        dense_s,
-    );
+    let (left, right) = match node.step(f) {
+        SimpsonStep::Converged(value) => {
+            *acc += value;
+            dense_t.push(node.b);
+            dense_s.push(*acc);
+            return;
+        }
+        SimpsonStep::Refine { left, right } => (left, right),
+    };
+    adaptive_simpson_recording(f, left, acc, dense_t, dense_s);
+    adaptive_simpson_recording(f, right, acc, dense_t, dense_s);
 }
 
-#[allow(clippy::too_many_arguments)]
-fn adaptive_simpson(
-    f: &impl Fn(f64) -> f64,
-    a: f64,
-    b: f64,
-    fa: f64,
-    fm: f64,
-    fb: f64,
-    whole: f64,
-    tol: f64,
-    depth: u32,
-) -> f64 {
-    let m = 0.5 * (a + b);
-    let (lm, rm) = (0.5 * (a + m), 0.5 * (m + b));
-    let (flm, frm) = (f(lm), f(rm));
-    let left = (m - a) / 6.0 * (fa + 4.0 * flm + fm);
-    let right = (b - m) / 6.0 * (fm + 4.0 * frm + fb);
-    let delta = left + right - whole;
-    if depth == 0 || delta.abs() <= 15.0 * tol {
-        return left + right + delta / 15.0;
+fn adaptive_simpson(f: &impl Fn(f64) -> f64, node: SimpsonNode) -> f64 {
+    match node.step(f) {
+        SimpsonStep::Converged(value) => value,
+        SimpsonStep::Refine { left, right } => {
+            adaptive_simpson(f, left) + adaptive_simpson(f, right)
+        }
     }
-    adaptive_simpson(f, a, m, fa, flm, fm, left, 0.5 * tol, depth - 1)
-        + adaptive_simpson(f, m, b, fm, frm, fb, right, 0.5 * tol, depth - 1)
 }
 
 #[cfg(test)]

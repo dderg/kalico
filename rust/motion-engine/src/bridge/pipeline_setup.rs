@@ -49,11 +49,15 @@ pub(super) fn build_stream_config(
 ) -> PyResult<motion_pipeline::StreamConfig> {
     let cart = cfg.cartesian;
     require_unlimited_config_jerk(cart.max_jerk).map_err(PyValueError::new_err)?;
+    let max_extrude_only_accel_mm_s2 = cfg.max_extrude_only_accel.unwrap_or(f64::INFINITY);
     Ok(motion_pipeline::StreamConfig {
-        corner: cfg.corner,
+        corner: geometry::CornerFitConfig {
+            ramp_accel_budget_mm_s2: max_extrude_only_accel_mm_s2,
+            ..cfg.corner
+        },
         integration_tol: STREAM_INTEGRATION_TOL,
         max_extrude_only_velocity_mm_s: cfg.max_extrude_only_velocity.unwrap_or(f64::INFINITY),
-        max_extrude_only_accel_mm_s2: cfg.max_extrude_only_accel.unwrap_or(f64::INFINITY),
+        max_extrude_only_accel_mm_s2,
         fit_tol_mm: cfg.fit_tolerance_mm,
         fit_tol_accel_mm_s2: cfg.fit_tolerance_accel_mm_s2,
         max_buffer_moves: STREAM_MAX_BUFFER_MOVES,
@@ -61,7 +65,7 @@ pub(super) fn build_stream_config(
             cart.max_velocity,
             cart.max_accel,
             cart.corner_deviation,
-            cart.max_jerk,
+            f64::INFINITY,
         )
         .map_err(PyRuntimeError::new_err)?,
     })
@@ -156,7 +160,7 @@ impl PyMotionEngine {
 
     pub(super) fn seed_ethercat_clock_estimates(&self, ethercat_mcu_ids: &HashSet<u32>) {
         let mut router = self.router.lock_ok();
-        let now_ns = motion_pipeline::timing::monotonic_ns();
+        let now_ns = ethercat_rt::clock::monotonic_ns();
         for &mcu_id in ethercat_mcu_ids {
             let mcu_h = mcu_handle_from_raw(mcu_id);
             let _ = router.set_clock_est_from_sample(

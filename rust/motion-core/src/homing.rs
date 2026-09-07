@@ -184,7 +184,7 @@ fn cartesian_from_motor_lanes(
     let kin_tag = configs
         .iter()
         .find(|c| c.axes.contains(&0usize))
-        .map(|c| c.kinematics)
+        .map(|c| c.hw.kinematics)
         .expect("lane 0 owner exists: checked above");
     Ok(KinematicsModule::from_tag(kin_tag)
         .map_err(|e| e.to_string())?
@@ -198,7 +198,7 @@ pub fn motor_frame_start(
     let kin_tag = configs
         .iter()
         .find(|c| c.axes.contains(&0usize))
-        .map(|c| c.kinematics)
+        .map(|c| c.hw.kinematics)
         .ok_or_else(|| {
             "spatial lane 0 is not configured on any mcu — cannot assemble \
              a cartesian position"
@@ -343,23 +343,25 @@ pub fn stepcompress_lane(
         return Ok(None);
     }
     let motor = cfg.motor_range(lane).start;
-    let oid = *cfg.stepper_oids.get(motor).ok_or_else(|| {
+    let oid = *cfg.hw.stepper_oids.get(motor).ok_or_else(|| {
         format!(
             "stepcompress mcu {mcu_id} axis {axis}: motor {motor} has no stepper oid \
              (stepper_oids has {} entries for {} motors)",
-            cfg.stepper_oids.len(),
-            cfg.motor_counts
+            cfg.hw.stepper_oids.len(),
+            cfg.hw
+                .motor_counts
                 .iter()
                 .map(|&count| usize::from(count))
                 .sum::<usize>()
         )
     })?;
-    let microstep_distance = *cfg.microstep_distance.get(motor).ok_or_else(|| {
+    let microstep_distance = *cfg.hw.microstep_distance.get(motor).ok_or_else(|| {
         format!(
             "stepcompress mcu {mcu_id} axis {axis}: motor {motor} has no microstep distance \
              (microstep_distance has {} entries for {} motors)",
-            cfg.microstep_distance.len(),
-            cfg.motor_counts
+            cfg.hw.microstep_distance.len(),
+            cfg.hw
+                .motor_counts
                 .iter()
                 .map(|&count| usize::from(count))
                 .sum::<usize>()
@@ -371,12 +373,13 @@ pub fn stepcompress_lane(
              is not a positive length"
         ));
     }
-    let invert_dir = *cfg.invert_dir.get(motor).ok_or_else(|| {
+    let invert_dir = *cfg.hw.invert_dir.get(motor).ok_or_else(|| {
         format!(
             "stepcompress mcu {mcu_id} axis {axis}: motor {motor} has no direction polarity \
              (invert_dir has {} entries for {} motors)",
-            cfg.invert_dir.len(),
-            cfg.motor_counts
+            cfg.hw.invert_dir.len(),
+            cfg.hw
+                .motor_counts
                 .iter()
                 .map(|&count| usize::from(count))
                 .sum::<usize>()
@@ -426,7 +429,7 @@ pub fn stepcompress_lane_of_oid(
     oid: u32,
 ) -> Result<StepcompressLane, String> {
     for cfg in configs.iter().filter(|cfg| cfg.mcu_id == mcu_id) {
-        for (motor, &motor_oid) in cfg.stepper_oids.iter().enumerate() {
+        for (motor, &motor_oid) in cfg.hw.stepper_oids.iter().enumerate() {
             if motor_oid != oid {
                 continue;
             }
@@ -444,7 +447,7 @@ pub fn stepcompress_lane_of_oid(
             if !cfg.pulse_capable(lane) {
                 continue;
             }
-            let microstep_distance = cfg.microstep_distance[motor];
+            let microstep_distance = cfg.hw.microstep_distance[motor];
             if microstep_distance <= 0.0 || !microstep_distance.is_finite() {
                 return Err(format!(
                     "stepcompress mcu {mcu_id} axis {axis} motor {motor}: microstep distance \
@@ -457,7 +460,7 @@ pub fn stepcompress_lane_of_oid(
                 motor,
                 oid,
                 microstep_distance,
-                invert_dir: cfg.invert_dir[motor],
+                invert_dir: cfg.hw.invert_dir[motor],
             });
         }
     }
@@ -501,7 +504,8 @@ pub fn reconcile_stepcompress_lanes(
             }
             let history_position = history_lane_position(axis_key)?;
             for motor in cfg.motor_range(lane_index) {
-                let lane = stepcompress_lane_of_oid(configs, cfg.mcu_id, cfg.stepper_oids[motor])?;
+                let lane =
+                    stepcompress_lane_of_oid(configs, cfg.mcu_id, cfg.hw.stepper_oids[motor])?;
                 reconciliations.push(StepcompressReconciliation {
                     lane,
                     history_position,

@@ -143,12 +143,14 @@ fn follower_advance_fits_the_transformed_acceleration() {
     ];
     for stage in stages {
         let fitted = super::fit_source_projection(
-            &shaped,
-            &shaped,
-            3,
-            &[0, 1],
-            &state,
-            0.0,
+            super::FollowerSource {
+                shaped: &shaped,
+                raw: &shaped,
+                axis: 3,
+                leaders: &[0, 1],
+                state: &state,
+                s_start: 0.0,
+            },
             crate::lowering::FitTol {
                 pos_mm: 5e-5,
                 accel_mm_s2: 0.5,

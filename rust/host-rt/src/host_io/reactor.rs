@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
 
-use crate::clock::{Clock, RealClock};
+use crate::clock::Clock;
 use crate::host_io::ReactorCommand;
 use crate::host_io::events::EventDispatcher;
 use crate::host_io::fire_and_forget_depth::FireAndForgetDepth;
@@ -74,38 +74,26 @@ pub enum ReactorState {
     Closed,
 }
 
+/// Everything a reactor needs besides its transport and clock.
+pub struct ReactorSetup {
+    pub parser: Arc<MsgProtoParser>,
+    pub submission_rx: Receiver<ReactorCommand>,
+    pub status_snapshot: Arc<ArcSwap<StatusEvent>>,
+    pub seq: IdentifySeqState,
+    pub config: crate::host_io::McuHostIoConfig,
+    pub fire_and_forget_depth: Arc<FireAndForgetDepth>,
+}
+
 impl Reactor {
-    pub fn new(
-        io: SerialFrameIo,
-        parser: Arc<MsgProtoParser>,
-        submission_rx: Receiver<ReactorCommand>,
-        status_snapshot: Arc<ArcSwap<StatusEvent>>,
-        seq: IdentifySeqState,
-        config: crate::host_io::McuHostIoConfig,
-        fire_and_forget_depth: Arc<FireAndForgetDepth>,
-    ) -> Self {
-        Self::new_with_clock(
-            io,
+    pub fn new_with_clock(io: SerialFrameIo, setup: ReactorSetup, clock: Arc<dyn Clock>) -> Self {
+        let ReactorSetup {
             parser,
             submission_rx,
             status_snapshot,
             seq,
             config,
-            Arc::new(RealClock),
             fire_and_forget_depth,
-        )
-    }
-
-    pub fn new_with_clock(
-        io: SerialFrameIo,
-        parser: Arc<MsgProtoParser>,
-        submission_rx: Receiver<ReactorCommand>,
-        status_snapshot: Arc<ArcSwap<StatusEvent>>,
-        seq: IdentifySeqState,
-        config: crate::host_io::McuHostIoConfig,
-        clock: Arc<dyn Clock>,
-        fire_and_forget_depth: Arc<FireAndForgetDepth>,
-    ) -> Self {
+        } = setup;
         let link_health = Arc::clone(&config.link_health);
         let mcu_label: Arc<str> = config.mcu_label.as_deref().unwrap_or("unknown").into();
         let event_dispatcher = EventDispatcher::new(
@@ -159,16 +147,18 @@ impl Reactor {
     ) -> Self {
         Self::new_with_clock(
             SerialFrameIo::new(port),
-            parser,
-            submission_rx,
-            status_snapshot,
-            IdentifySeqState {
-                next_send_seq_abs: 1,
-                mcu_receive_seq_abs: 1,
+            ReactorSetup {
+                parser,
+                submission_rx,
+                status_snapshot,
+                seq: IdentifySeqState {
+                    next_send_seq_abs: 1,
+                    mcu_receive_seq_abs: 1,
+                },
+                config,
+                fire_and_forget_depth: Arc::new(FireAndForgetDepth::default()),
             },
-            config,
             clock,
-            Arc::new(FireAndForgetDepth::default()),
         )
     }
 }

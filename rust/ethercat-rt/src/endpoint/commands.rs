@@ -20,7 +20,9 @@ use crate::wire::{
     set_torque_response_frame, start_capture_response_frame, stepper_suppress_response_frame,
     stop_capture_response_frame, stop_response_frame, Command,
 };
-use ethercat_setpoint::dynamics::{DynamicsModel, ERR_DYNAMICS_BAD_DIM, ERR_DYNAMICS_REJECTED};
+use ethercat_setpoint::dynamics::{
+    DynamicsModel, FrameParts, ModeParts, PinParts, ERR_DYNAMICS_BAD_DIM, ERR_DYNAMICS_REJECTED,
+};
 use ethercat_setpoint::setpoint::{
     RunHeader, SetpointEntry, ERR_BUZZ_IN_RING_MODE, ERR_LANE_SLOT_MISMATCH,
     EXECUTOR_SETPOINT_RING, MAX_FILL_CYCLES, RING_DEPTH_CYCLES,
@@ -826,12 +828,16 @@ fn handle_resonance_buzz(ctx: &mut EndpointCtx, correlation_id: u32, _msg: Reson
 fn handle_set_diff_damper(ctx: &mut EndpointCtx, correlation_id: u32, msg: SetDiffDamper) {
     let rc = ctx.damper.set(
         ctx.num_slaves,
-        msg.slot_a,
-        msg.slot_b,
-        msg.gain_milli,
-        msg.clamp_tenths,
-        msg.lpf_millihz,
-        msg.lead_us,
+        crate::pair::SlotPair {
+            a: msg.slot_a,
+            b: msg.slot_b,
+        },
+        crate::damper::DamperGains {
+            gain_milli: msg.gain_milli,
+            clamp_tenths: msg.clamp_tenths,
+            lpf_millihz: msg.lpf_millihz,
+            lead_us: msg.lead_us,
+        },
     );
     crate::rt_eprintln!(
         "ec-rt: SetDiffDamper slots=({},{}) gain_milli={} clamp={} 0.1% \
@@ -862,12 +868,16 @@ fn handle_set_diff_damper(ctx: &mut EndpointCtx, correlation_id: u32, msg: SetDi
 fn handle_set_diff_trim(ctx: &mut EndpointCtx, correlation_id: u32, msg: SetDiffTrim) {
     let rc = ctx.trim.set(
         ctx.num_slaves,
-        msg.slot_a,
-        msg.slot_b,
-        msg.gain_micro,
-        msg.clamp_um,
-        msg.lpf_millihz,
-        msg.settle_ms,
+        crate::pair::SlotPair {
+            a: msg.slot_a,
+            b: msg.slot_b,
+        },
+        crate::trim::TrimGains {
+            gain_micro: msg.gain_micro,
+            clamp_um: msg.clamp_um,
+            lpf_millihz: msg.lpf_millihz,
+            settle_ms: msg.settle_ms,
+        },
     );
     crate::rt_eprintln!(
         "ec-rt: SetDiffTrim slots=({},{}) gain_micro={} clamp={} um lpf={} mHz \
@@ -984,16 +994,22 @@ pub(super) fn handle_set_dynamics_model(
             })
             .collect();
         match DynamicsModel::from_parts(
-            slots,
-            modes,
-            &msg.frame,
-            &msg.mass,
-            &msg.viscous,
-            &msg.coulomb,
-            &msg.compliance,
-            &msg.pin_mass,
-            &msg.pin_zeta,
-            f64::from(msg.pin_lead_us),
+            FrameParts {
+                n_slots: slots,
+                n_modes: modes,
+                frame: &msg.frame,
+            },
+            ModeParts {
+                mass: &msg.mass,
+                viscous: &msg.viscous,
+                coulomb: &msg.coulomb,
+                compliance: &msg.compliance,
+            },
+            PinParts {
+                mass: &msg.pin_mass,
+                zeta: &msg.pin_zeta,
+                lead_us: f64::from(msg.pin_lead_us),
+            },
             &pairs,
         ) {
             Ok(model) => {

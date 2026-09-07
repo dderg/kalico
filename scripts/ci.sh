@@ -16,6 +16,7 @@
 #   rustup target add thumbv7em-none-eabi thumbv6m-none-eabi thumbv7m-none-eabi
 #   rustup component add --toolchain nightly miri
 #   cargo install cargo-nextest --locked        # or: curl -LsSf https://get.nexte.st/latest/<os> | tar zxf - -C ~/.cargo/bin
+#   cargo install cargo-public-api --locked     # public-api gate (rustdoc JSON via the nightly toolchain)
 #   cargo install cargo-deny                     # optional
 set -uo pipefail
 
@@ -97,6 +98,7 @@ job_rust_fuzz() {
 
 job_rust_clippy() { cd "$RUST" && cargo clippy --workspace --all-targets -- -D warnings; }
 job_rust_fmt()    { cd "$RUST" && cargo fmt --all -- --check; }
+job_public_api()  { "$ROOT/scripts/public-api.sh"; }
 
 job_rust_host()   { job_rust_test && job_rust_clippy && job_rust_fmt; }
 
@@ -334,6 +336,7 @@ run_all() {
     run_check "rust-test"       job_rust_test
     run_check "rust-clippy"     job_rust_clippy
     run_check "rust-fmt"        job_rust_fmt
+    run_check "public-api"      job_public_api
     run_check "watchdog-canary" job_watchdog_canary
     if [ "$quick" != "true" ]; then
         run_check "cbindgen-drift"  job_cbindgen_drift
@@ -400,6 +403,7 @@ case "$name" in
     rust-fuzz)        job=(job_rust_fuzz) ;;
     rust-clippy)      job=(job_rust_clippy) ;;
     rust-fmt)         job=(job_rust_fmt) ;;
+    public-api)       job=(job_public_api) ;;
     rust-loom)        job=(job_rust_loom) ;;
     rust-mcu-h7)      job=(job_rust_mcu_h7) ;;
     rust-mcu-f4)      job=(job_rust_mcu_f4) ;;

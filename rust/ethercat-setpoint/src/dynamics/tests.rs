@@ -200,16 +200,22 @@ fn rejects_each_invariant_violation() {
 fn from_parts_agrees_with_toml_parse() {
     let toml = DynamicsModel::from_toml_str(COREXY).unwrap();
     let parts = DynamicsModel::from_parts(
-        2,
-        2,
-        &[0.5, 0.5, 0.5, -0.5],
-        &[0.040, 0.080],
-        &[0.004, 0.004],
-        &[1.0, 1.0],
-        &[],
-        &[],
-        &[],
-        0.0,
+        FrameParts {
+            n_slots: 2,
+            n_modes: 2,
+            frame: &[0.5, 0.5, 0.5, -0.5],
+        },
+        ModeParts {
+            mass: &[0.040, 0.080],
+            viscous: &[0.004, 0.004],
+            coulomb: &[1.0, 1.0],
+            compliance: &[],
+        },
+        PinParts {
+            mass: &[],
+            zeta: &[],
+            lead_us: 0.0,
+        },
         &[],
     )
     .unwrap();
@@ -231,86 +237,134 @@ fn from_parts_rejects_each_invariant_violation() {
     let frame = [0.5, 0.5, 0.5, -0.5];
     let mode2 = [0.004, 0.004];
     assert!(matches!(
-        DynamicsModel::from_parts(0, 0, &[], &[], &[], &[], &[], &[], &[], 0.0, &[]),
-        Err(ProfileError::Dim(_))
-    ));
-    assert!(matches!(
         DynamicsModel::from_parts(
-            2,
-            2,
-            &frame[..3],
-            &[0.04, 0.08],
-            &mode2,
-            &mode2,
+            FrameParts {
+                n_slots: 0,
+                n_modes: 0,
+                frame: &[]
+            },
+            ModeParts {
+                mass: &[],
+                viscous: &[],
+                coulomb: &[],
+                compliance: &[]
+            },
+            PinParts {
+                mass: &[],
+                zeta: &[],
+                lead_us: 0.0
+            },
             &[],
-            &[],
-            &[],
-            0.0,
-            &[]
         ),
         Err(ProfileError::Dim(_))
     ));
     assert!(matches!(
         DynamicsModel::from_parts(
-            2,
-            2,
-            &frame,
-            &[0.04],
-            &mode2,
-            &mode2,
+            FrameParts {
+                n_slots: 2,
+                n_modes: 2,
+                frame: &frame[..3]
+            },
+            ModeParts {
+                mass: &[0.04, 0.08],
+                viscous: &mode2,
+                coulomb: &mode2,
+                compliance: &[]
+            },
+            PinParts {
+                mass: &[],
+                zeta: &[],
+                lead_us: 0.0
+            },
             &[],
-            &[],
-            &[],
-            0.0,
-            &[]
         ),
         Err(ProfileError::Dim(_))
     ));
     assert!(matches!(
         DynamicsModel::from_parts(
-            2,
-            2,
-            &[0.5, 0.5, 0.5, 0.5],
-            &[0.04, 0.08],
-            &mode2,
-            &mode2,
+            FrameParts {
+                n_slots: 2,
+                n_modes: 2,
+                frame: &frame
+            },
+            ModeParts {
+                mass: &[0.04],
+                viscous: &mode2,
+                coulomb: &mode2,
+                compliance: &[]
+            },
+            PinParts {
+                mass: &[],
+                zeta: &[],
+                lead_us: 0.0
+            },
             &[],
+        ),
+        Err(ProfileError::Dim(_))
+    ));
+    assert!(matches!(
+        DynamicsModel::from_parts(
+            FrameParts {
+                n_slots: 2,
+                n_modes: 2,
+                frame: &[0.5, 0.5, 0.5, 0.5]
+            },
+            ModeParts {
+                mass: &[0.04, 0.08],
+                viscous: &mode2,
+                coulomb: &mode2,
+                compliance: &[]
+            },
+            PinParts {
+                mass: &[],
+                zeta: &[],
+                lead_us: 0.0
+            },
             &[],
-            &[],
-            0.0,
-            &[]
         ),
         Err(ProfileError::FrameRankDeficient)
     ));
     assert!(matches!(
         DynamicsModel::from_parts(
-            2,
-            2,
-            &frame,
-            &[0.0, 0.08],
-            &mode2,
-            &mode2,
+            FrameParts {
+                n_slots: 2,
+                n_modes: 2,
+                frame: &frame
+            },
+            ModeParts {
+                mass: &[0.0, 0.08],
+                viscous: &mode2,
+                coulomb: &mode2,
+                compliance: &[]
+            },
+            PinParts {
+                mass: &[],
+                zeta: &[],
+                lead_us: 0.0
+            },
             &[],
-            &[],
-            &[],
-            0.0,
-            &[]
         ),
         Err(ProfileError::NonPositive(_))
     ));
     assert!(matches!(
         DynamicsModel::from_parts(
-            2,
-            2,
-            &frame,
-            &[0.04, 0.08],
-            &[f32::NAN, 0.004],
-            &mode2,
+            FrameParts {
+                n_slots: 2,
+                n_modes: 2,
+                frame: &frame
+            },
+            ModeParts {
+                mass: &[0.04, 0.08],
+                viscous: &[f32::NAN, 0.004],
+                coulomb: &mode2,
+                compliance: &[]
+            },
+            PinParts {
+                mass: &[],
+                zeta: &[],
+                lead_us: 0.0
+            },
             &[],
-            &[],
-            &[],
-            0.0,
-            &[]
         ),
         Err(ProfileError::NotFinite(_))
     ));
@@ -377,16 +431,22 @@ fn opposite_pair_columns_preserve_generalized_force() {
         direction_split: 0.2,
     };
     let model = DynamicsModel::from_parts(
-        2,
-        1,
-        &[0.5, -0.5],
-        &[0.04],
-        &[0.0],
-        &[0.0],
-        &[],
-        &[],
-        &[],
-        0.0,
+        FrameParts {
+            n_slots: 2,
+            n_modes: 1,
+            frame: &[0.5, -0.5],
+        },
+        ModeParts {
+            mass: &[0.04],
+            viscous: &[0.0],
+            coulomb: &[0.0],
+            compliance: &[],
+        },
+        PinParts {
+            mass: &[],
+            zeta: &[],
+            lead_us: 0.0,
+        },
         &[pair],
     )
     .unwrap();
@@ -415,49 +475,67 @@ fn pair_validation_rejects_invalid_contracts() {
         pair(0, 1, f32::NAN),
     ] {
         assert!(DynamicsModel::from_parts(
-            2,
-            1,
-            &frame[..2],
-            &vectors[..1],
-            &[0.0],
-            &[0.0],
-            &[],
-            &[],
-            &[],
-            0.0,
-            &[spec]
+            FrameParts {
+                n_slots: 2,
+                n_modes: 1,
+                frame: &frame[..2]
+            },
+            ModeParts {
+                mass: &vectors[..1],
+                viscous: &[0.0],
+                coulomb: &[0.0],
+                compliance: &[]
+            },
+            PinParts {
+                mass: &[],
+                zeta: &[],
+                lead_us: 0.0
+            },
+            &[spec],
         )
         .is_err());
     }
     assert!(matches!(
         DynamicsModel::from_parts(
-            4,
-            1,
-            &[0.25; 4],
-            &vectors[..1],
-            &[0.0],
-            &[0.0],
-            &[],
-            &[],
-            &[],
-            0.0,
-            &[pair(0, 1, 0.1), pair(1, 2, 0.1)]
+            FrameParts {
+                n_slots: 4,
+                n_modes: 1,
+                frame: &[0.25; 4]
+            },
+            ModeParts {
+                mass: &vectors[..1],
+                viscous: &[0.0],
+                coulomb: &[0.0],
+                compliance: &[]
+            },
+            PinParts {
+                mass: &[],
+                zeta: &[],
+                lead_us: 0.0
+            },
+            &[pair(0, 1, 0.1), pair(1, 2, 0.1)],
         ),
         Err(ProfileError::PairSlot(_))
     ));
     assert!(matches!(
         DynamicsModel::from_parts(
-            2,
-            1,
-            &[0.5, 0.500_001],
-            &vectors[..1],
-            &[0.0],
-            &[0.0],
-            &[],
-            &[],
-            &[],
-            0.0,
-            &[pair(0, 1, 0.1)]
+            FrameParts {
+                n_slots: 2,
+                n_modes: 1,
+                frame: &[0.5, 0.500_001]
+            },
+            ModeParts {
+                mass: &vectors[..1],
+                viscous: &[0.0],
+                coulomb: &[0.0],
+                compliance: &[]
+            },
+            PinParts {
+                mass: &[],
+                zeta: &[],
+                lead_us: 0.0
+            },
+            &[pair(0, 1, 0.1)],
         ),
         Err(ProfileError::PairNotParallel(0))
     ));
@@ -510,21 +588,27 @@ fn profile_rejects_duplicate_axes_before_pair_resolution() {
 fn pair_rejects_zero_first_frame_column() {
     assert!(matches!(
         DynamicsModel::from_parts(
-            3,
-            1,
-            &[0.0, 0.0, 1.0],
-            &[0.04],
-            &[0.0],
-            &[0.0],
-            &[],
-            &[],
-            &[],
-            0.0,
+            FrameParts {
+                n_slots: 3,
+                n_modes: 1,
+                frame: &[0.0, 0.0, 1.0]
+            },
+            ModeParts {
+                mass: &[0.04],
+                viscous: &[0.0],
+                coulomb: &[0.0],
+                compliance: &[]
+            },
+            PinParts {
+                mass: &[],
+                zeta: &[],
+                lead_us: 0.0
+            },
             &[PairSpec {
                 first: 0,
                 second: 1,
                 direction_split: 0.1,
-            }]
+            }],
         ),
         Err(ProfileError::PairFirstColumnZero(0))
     ));

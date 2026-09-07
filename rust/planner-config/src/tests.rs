@@ -33,7 +33,6 @@ fn effective_limits_runtime_caps_clamp_but_never_raise() {
     cfg.runtime_caps = RuntimeCaps {
         velocity: Some(50.0),
         accel: Some(10_000_000.0),
-        jerk_override: None,
     };
     let (v, a, _) = cfg.effective_limits();
     assert_eq!(v, 50.0);

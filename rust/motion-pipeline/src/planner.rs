@@ -1,6 +1,8 @@
-use geometry::path::lowering::PositionProfile;
-use geometry::path::{CurvatureProfile, Segment};
-use geometry::{Move, VelocityProfile, plan_velocity_stops_select_prefix};
+use geometry::path::Segment;
+use geometry::{
+    Move, VelocityPlanParams, VelocityProfile, plan_velocity_stops_select_prefix,
+    seam_requires_stop,
+};
 
 use crate::types::{Control, PlannedItem, PlannedMove, StreamConfig, StreamInput};
 
@@ -81,8 +83,7 @@ impl Planner {
             Control::Dwell { .. }
             | Control::SetAxisChains(_)
             | Control::SetMesh { .. }
-            | Control::Nudge { .. }
-            | Control::Barrier(_) => {
+            | Control::Dispatch(_) => {
                 assert!(
                     self.moves.is_empty(),
                     "planner: control token arrived with {} undrained moves — a Drain must \
@@ -136,10 +137,12 @@ impl Planner {
         let profile = plan_velocity_stops_select_prefix(
             &self.moves,
             &stop_before,
-            self.config.integration_tol,
-            self.config.max_extrude_only_velocity_mm_s,
-            self.config.max_extrude_only_accel_mm_s2,
-            self.entry_v,
+            VelocityPlanParams {
+                integration_tol: self.config.integration_tol,
+                max_extrude_only_velocity_mm_s: self.config.max_extrude_only_velocity_mm_s,
+                max_extrude_only_accel_mm_s2: self.config.max_extrude_only_accel_mm_s2,
+                entry_v: self.entry_v,
+            },
             select_prefix,
         )
         .unwrap_or_else(|e| panic!("planner: velocity plan failed: {e:?}"));
@@ -249,51 +252,9 @@ impl Planner {
         matches!(self.moves[i].segment.spatial, Some(Segment::Line(_))) || self.stop_at_seam(i)
     }
 
-    /// The toolhead must be at rest across the seam entering move `i` unless
-    /// the path is tangent-continuous there: both sides have spatial bodies
-    /// and the exit heading of one is the entry heading of the other (within
-    /// the same collinearity tolerance the fit stage blends corners against).
-    /// Anchoring every non-tangent seam to rest makes a velocity
-    /// discontinuity impossible regardless of what produced the moves. The
-    /// same principle covers the followers: a seam where an extruding axis's
-    /// `de/ds` would step by more than the fit stage's ramp tolerance anchors
-    /// to rest too — the fit stage ramps modest steps through its blends (its
-    /// ramps anchor at the neighbors' own ratios, so blended seams pass here by
-    /// construction), but an abrupt flow change on a collinear continuation
-    /// has no corner to ramp through and would otherwise step `ė = r·v` at
-    /// full speed.
     fn stop_at_seam(&self, i: usize) -> bool {
-        let prev = &self.moves[i - 1];
-        let next = &self.moves[i];
-        let (Some(a), Some(b)) = (&prev.segment.spatial, &next.segment.spatial) else {
-            return true;
-        };
-        let t_in = a.heading_at(a.s_len());
-        let t_out = b.heading_at(0.0);
-        let cos_theta = t_in[0] * t_out[0] + t_in[1] * t_out[1] + t_in[2] * t_out[2];
-        if libm::acos(cos_theta.clamp(-1.0, 1.0)) > self.config.corner.theta_min_rad {
-            return true;
-        }
-        follower_rate_step(prev, next, self.config.corner.extrusion_ramp_rel_tol)
+        seam_requires_stop(&self.moves[i - 1], &self.moves[i], self.config.corner)
     }
-}
-
-/// Whether any axis extruding on both sides of the seam demands a `de/ds`
-/// step beyond `rel_tol`. Mirrors the fit stage's `ExtrusionStep` gate; axes
-/// absent from a side carry ratio zero and are exempt (ramping to or from
-/// zero is always allowed).
-fn follower_rate_step(prev: &Move, next: &Move, rel_tol: f64) -> bool {
-    let len_in = prev.segment.s_len();
-    prev.segment.followers.iter().any(|f| {
-        let r_in = f.ratio_at(len_in, len_in);
-        let r_out = next
-            .segment
-            .followers
-            .iter()
-            .find(|g| g.axis_index == f.axis_index)
-            .map_or(0.0, |g| g.ratio_at(0.0, next.segment.s_len()));
-        r_in != 0.0 && r_out != 0.0 && (r_out - r_in).abs() > rel_tol * r_in.abs().max(r_out.abs())
-    })
 }
 
 #[cfg(test)]

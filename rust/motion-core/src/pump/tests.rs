@@ -1415,16 +1415,18 @@ fn pulse_endpoint(
     }];
     Arc::new(Mutex::new(
         StepcompressEndpoint::new(
-            BUZZ_MCU,
-            step_shim::StepShim::new(motors, super::stepcompress_sink::SHIM_RING_DEPTH),
+            EndpointSpec {
+                mcu_id: BUZZ_MCU,
+                shim: step_shim::StepShim::new(motors, super::stepcompress_sink::SHIM_RING_DEPTH),
+                egress,
+                pump_control: control.clone(),
+                clock_of,
+                budget: 4,
+                step_count_query: Arc::new(|_| Ok(0)),
+                link_health: None,
+                barrier_ack_deadline_secs: super::stepcompress_sink::BARRIER_ACK_DEADLINE_SECONDS,
+            },
             &[crate::pump::StepLaneConfig { axis, oid }],
-            egress,
-            control.clone(),
-            clock_of,
-            4,
-            Arc::new(|_| Ok(0)),
-            None,
-            super::stepcompress_sink::BARRIER_ACK_DEADLINE_SECONDS,
         )
         .expect("one motor on one axis builds a stepcompress endpoint"),
     ))

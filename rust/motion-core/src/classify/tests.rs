@@ -69,13 +69,13 @@ fn classify_bezier_uses_arc_length_for_distance_and_ratio() {
     let start = [0.0, 0.0, 0.0];
     let m = classify_bezier(
         start,
-        0.0,
-        10.0,
-        0.0,
-        10.0,
-        10.0,
-        0.0,
-        0.0,
+        BezierHandles {
+            i: 0.0,
+            j: 10.0,
+            p: 0.0,
+            q: 10.0,
+        },
+        [10.0, 0.0, 0.0],
         &[(3usize, 2.0)],
         30.0,
     )
@@ -91,7 +91,7 @@ fn classify_bezier_uses_arc_length_for_distance_and_ratio() {
 
 #[test]
 fn classify_quadratic_builds_a_segment() {
-    let m = classify_quadratic([0.0, 0.0, 0.0], 5.0, 5.0, 10.0, 0.0, 0.0, &[], 30.0)
+    let m = classify_quadratic([0.0, 0.0, 0.0], 5.0, 5.0, [10.0, 0.0, 0.0], &[], 30.0)
         .expect("quadratic classifies");
     assert!(m.distance_mm > 10.0);
     assert_eq!(m.segment.feedrate_mm_s, 30.0);
@@ -101,7 +101,16 @@ fn classify_quadratic_builds_a_segment() {
 fn chain_reflection_negates_previous_pq() {
     let prev_pq = (3.0, -2.0);
     let (i, j) = (-prev_pq.0, -prev_pq.1);
-    let cps = g5_control_points([0.0, 0.0, 0.0], i, j, 1.0, 1.0, 10.0, 0.0, 0.0);
+    let cps = g5_control_points(
+        [0.0, 0.0, 0.0],
+        BezierHandles {
+            i,
+            j,
+            p: 1.0,
+            q: 1.0,
+        },
+        [10.0, 0.0, 0.0],
+    );
     assert_eq!(cps[1][0], -3.0);
     assert_eq!(cps[1][1], 2.0);
     assert_eq!(cps[1][2], 0.0);
@@ -111,25 +120,25 @@ fn chain_reflection_negates_previous_pq() {
 fn experiment_cusp_and_near_cusp_classification_is_finite() {
     let exact = classify_bezier(
         [0.0, 0.0, 0.0],
-        0.0,
-        0.0,
-        -5.0,
-        0.0,
-        5.0,
-        0.0,
-        0.0,
+        BezierHandles {
+            i: 0.0,
+            j: 0.0,
+            p: -5.0,
+            q: 0.0,
+        },
+        [5.0, 0.0, 0.0],
         &[],
         30.0,
     );
     let near = classify_bezier(
         [0.0, 0.0, 0.0],
-        1e-7,
-        0.0,
-        -5.0,
-        0.0,
-        5.0,
-        0.0,
-        0.0,
+        BezierHandles {
+            i: 1e-7,
+            j: 0.0,
+            p: -5.0,
+            q: 0.0,
+        },
+        [5.0, 0.0, 0.0],
         &[],
         30.0,
     );

@@ -1,6 +1,6 @@
 use geometry::curve::to_collinear_bezier;
 #[cfg(test)]
-use geometry::curve::{g5_control_points, g51_control_points};
+use geometry::curve::{BezierHandles, g5_control_points, g51_control_points};
 use geometry::segment::{CubicSegment, FollowerDemand, SourceRange};
 use nurbs::VectorNurbs;
 
@@ -140,38 +140,30 @@ fn classify_curve(
 }
 
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn classify_bezier(
     start: [f64; 3],
-    i: f64,
-    j: f64,
-    p: f64,
-    q: f64,
-    dx: f64,
-    dy: f64,
-    dz: f64,
+    handles: BezierHandles,
+    displacement: [f64; 3],
     followers: &[(usize, f64)],
     feedrate_mm_s: f64,
 ) -> Result<ClassifiedMove, ClassifyError> {
     classify_curve(
-        g5_control_points(start, i, j, p, q, dx, dy, dz),
+        g5_control_points(start, handles, displacement),
         followers,
         feedrate_mm_s,
     )
 }
 
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn classify_quadratic(
     start: [f64; 3],
     i: f64,
     j: f64,
-    dx: f64,
-    dy: f64,
-    dz: f64,
+    displacement: [f64; 3],
     followers: &[(usize, f64)],
     feedrate_mm_s: f64,
 ) -> Result<ClassifiedMove, ClassifyError> {
+    let [dx, dy, dz] = displacement;
     classify_curve(
         g51_control_points(start, i, j, dx, dy, dz),
         followers,

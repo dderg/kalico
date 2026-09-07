@@ -1,7 +1,8 @@
+use crate::lowering::FitTol;
 use crate::types::*;
 use crate::*;
 use geometry::segment::SourceRange;
-use geometry::{CornerFitConfig, MoveContext, VelocityLimits, line_move};
+use geometry::{CornerFitConfig, MeshGridSpec, MoveContext, VelocityLimits, line_move};
 use nurbs::eval::eval;
 use std::sync::Arc;
 
@@ -834,10 +835,12 @@ impl MomentSamplerInput {
         breaks.extend_from_slice(second_track.knots());
         let signal_degree = crate::shaper::AxisSignalTable::from_tracks(
             [&first_track, &second_track],
-            first_t,
-            last_t,
-            true,
-            true,
+            crate::shaper::SignalBounds {
+                first_t,
+                last_t,
+                boundary: crate::shaper::FitBoundary::StreamBoundary,
+                lookahead: crate::shaper::Lookahead::Forced,
+            },
         )
         .max_degree();
         Self {
@@ -854,10 +857,12 @@ impl MomentSamplerInput {
     fn table(&self) -> crate::shaper::AxisSignalTable {
         crate::shaper::AxisSignalTable::from_tracks(
             [&self.tracks[0], &self.tracks[1]],
-            self.first_t,
-            self.last_t,
-            true,
-            true,
+            crate::shaper::SignalBounds {
+                first_t: self.first_t,
+                last_t: self.last_t,
+                boundary: crate::shaper::FitBoundary::StreamBoundary,
+                lookahead: crate::shaper::Lookahead::Forced,
+            },
         )
     }
 
@@ -950,8 +955,16 @@ fn moment_convolution_preserves_position_and_slope_jump_derivatives() {
             },
         ]);
         let table = std::rc::Rc::new(
-            crate::shaper::AxisSignalTable::from_tracks([&track], -4.0, 4.0, true, true)
-                .with_piece_moments(4),
+            crate::shaper::AxisSignalTable::from_tracks(
+                [&track],
+                crate::shaper::SignalBounds {
+                    first_t: -4.0,
+                    last_t: 4.0,
+                    boundary: crate::shaper::FitBoundary::StreamBoundary,
+                    lookahead: crate::shaper::Lookahead::Forced,
+                },
+            )
+            .with_piece_moments(4),
         );
         let input_jumps = table.input_jumps().to_vec();
         let moments = std::rc::Rc::clone(&table);
@@ -1103,9 +1116,10 @@ fn smooth_shaper_second_batch_window_before_stream_start_clamps() {
     let mut lowered = Vec::new();
     for i in 0..8 {
         let (a, b) = (i as f64, (i + 1) as f64);
-        lowered.push(BaseItem::Seg(BaseSegment {
-            segment: constant_seg(a.mul_add(step, t0), b.mul_add(step, t0)),
-        }));
+        lowered.push(BaseItem::Seg(constant_seg(
+            a.mul_add(step, t0),
+            b.mul_add(step, t0),
+        )));
     }
 
     let shaped = shape_one_at_a_time(chains, fit_tol(cfg()), lowered);
@@ -1266,7 +1280,19 @@ fn replay_inputs(
 #[test]
 fn mesh_warp_tracks_across_a_fenced_move_sequence() {
     let z = vec![0.10, 0.00, -0.10, 0.05, 0.00, -0.05, -0.10, 0.00, 0.10];
-    let mut mesh = geometry::MeshGrid::new(20.0, 20.0, 100.0, 100.0, 3, 3, z, 0.2).unwrap();
+    let mut mesh = geometry::MeshGrid::new(
+        MeshGridSpec {
+            x_min: 20.0,
+            y_min: 20.0,
+            dx: 100.0,
+            dy: 100.0,
+            nx: 3,
+            ny: 3,
+            tension: 0.2,
+        },
+        z,
+    )
+    .unwrap();
     mesh.zero_at(120.0, 120.0);
     let transform = std::sync::Arc::new(geometry::SurfaceTransform::new(
         mesh,
@@ -1325,9 +1351,19 @@ fn mesh_warp_tracks_across_a_fenced_move_sequence() {
 
 #[test]
 fn small_mesh_variations_stay_continuous_across_move_boundaries() {
-    let mut mesh =
-        geometry::MeshGrid::new(0.0, 0.0, 100.0, 100.0, 2, 2, vec![0.0, 0.1, 0.0, 0.1], 0.2)
-            .unwrap();
+    let mut mesh = geometry::MeshGrid::new(
+        MeshGridSpec {
+            x_min: 0.0,
+            y_min: 0.0,
+            dx: 100.0,
+            dy: 100.0,
+            nx: 2,
+            ny: 2,
+            tension: 0.2,
+        },
+        vec![0.0, 0.1, 0.0, 0.1],
+    )
+    .unwrap();
     mesh.zero_at(0.0, 0.0);
     let transform = std::sync::Arc::new(geometry::SurfaceTransform::new(
         mesh,
@@ -1723,9 +1759,7 @@ fn follower_frontier_waits_for_exact_kernel_lookahead() {
         (frontier_end, buffered_end),
         (buffered_end, last_end),
     ] {
-        lowered.push(BaseItem::Seg(BaseSegment {
-            segment: segment(t_start, t_end),
-        }));
+        lowered.push(BaseItem::Seg(segment(t_start, t_end)));
     }
 
     let shaped = shape_one_at_a_time(chains, fit_tol(cfg()), lowered);
@@ -2369,16 +2403,21 @@ fn the_ladder_fits_a_resolution_scale_span_without_high_degree_amplification() {
     );
     let attempt = crate::lowering::ladder_fit(
         &base,
-        h,
-        tolerance,
-        &truth_p,
-        &truth_a,
-        &truth_v,
-        truth_p(1.0) - truth_p(-1.0),
-        f64::INFINITY,
+        crate::lowering::LadderSpan {
+            h,
+            endpoint_delta: truth_p(1.0) - truth_p(-1.0),
+        },
+        &crate::lowering::LadderTruth {
+            position: &truth_p,
+            velocity: &truth_v,
+            acceleration: &truth_a,
+        },
+        crate::lowering::LadderBudget {
+            tol: tolerance,
+            velocity: f64::INFINITY,
+        },
         crate::lowering::LadderPolicy {
-            endpoint_anchored: true,
-            enforce_velocity_sign: true,
+            velocity_sign: crate::lowering::VelocitySign::Certified,
             acceleration_monotonicity: None,
             high_degree_span_floor: 0.0,
         },
@@ -2388,7 +2427,7 @@ fn the_ladder_fits_a_resolution_scale_span_without_high_degree_amplification() {
         Err(failure) => panic!(
             "a resolution-scale span must fit without midpoint shortcuts: u={}, \
              position error {}, acceleration error {}",
-            failure.u, failure.position_error, failure.acceleration_error
+            failure.u, failure.error.position, failure.error.acceleration
         ),
     };
     let track =
@@ -2467,16 +2506,21 @@ fn a_smooth_cusp_fits_below_the_high_degree_floor_without_bump_corrections() {
         );
         let attempt = crate::lowering::ladder_fit(
             &base,
-            h,
-            tolerance,
-            &truth_p,
-            &truth_a,
-            &truth_v,
-            truth_p(1.0) - truth_p(-1.0),
-            f64::INFINITY,
+            crate::lowering::LadderSpan {
+                h,
+                endpoint_delta: truth_p(1.0) - truth_p(-1.0),
+            },
+            &crate::lowering::LadderTruth {
+                position: &truth_p,
+                velocity: &truth_v,
+                acceleration: &truth_a,
+            },
+            crate::lowering::LadderBudget {
+                tol: tolerance,
+                velocity: f64::INFINITY,
+            },
             crate::lowering::LadderPolicy {
-                endpoint_anchored: true,
-                enforce_velocity_sign: true,
+                velocity_sign: crate::lowering::VelocitySign::Certified,
                 acceleration_monotonicity: None,
                 high_degree_span_floor,
             },
@@ -2489,7 +2533,7 @@ fn a_smooth_cusp_fits_below_the_high_degree_floor_without_bump_corrections() {
                     "the cusp must fit by the 3e-8 decade, still failing at h={h}: \
                      u={}, acceleration error {} > {}",
                     failure.u,
-                    failure.acceleration_error,
+                    failure.error.acceleration,
                     tolerance.accel_mm_s2
                 );
                 span_start = 0.5 * (span_start + span_end);
@@ -2578,16 +2622,21 @@ fn a_constant_acceleration_resolution_span_fits_the_anchored_quadratic() {
     );
     let fit = crate::lowering::ladder_fit(
         &base,
-        h,
-        tolerance,
-        &truth_p,
-        &truth_a,
-        &truth_v,
-        truth_p(1.0) - truth_p(-1.0),
-        velocity_budget,
+        crate::lowering::LadderSpan {
+            h,
+            endpoint_delta: truth_p(1.0) - truth_p(-1.0),
+        },
+        &crate::lowering::LadderTruth {
+            position: &truth_p,
+            velocity: &truth_v,
+            acceleration: &truth_a,
+        },
+        crate::lowering::LadderBudget {
+            tol: tolerance,
+            velocity: velocity_budget,
+        },
         crate::lowering::LadderPolicy {
-            endpoint_anchored: true,
-            enforce_velocity_sign: true,
+            velocity_sign: crate::lowering::VelocitySign::Certified,
             acceleration_monotonicity: None,
             high_degree_span_floor: 3.6e-7,
         },
@@ -2597,9 +2646,9 @@ fn a_constant_acceleration_resolution_span_fits_the_anchored_quadratic() {
             "a constant-acceleration resolution span must fit: u={}, position error {}, \
              velocity error {}, acceleration error {} > {}",
             failure.u,
-            failure.position_error,
-            failure.velocity_error,
-            failure.acceleration_error,
+            failure.error.position,
+            failure.error.velocity,
+            failure.error.acceleration,
             tolerance.accel_mm_s2
         )
     });
@@ -2712,16 +2761,21 @@ fn an_endpoint_anchored_fit_never_steps_the_right_seam() {
     );
     let fit = crate::lowering::ladder_fit(
         &base,
-        h,
-        tolerance,
-        &truth_p,
-        &truth_a,
-        &truth_v,
-        truth_p(1.0) - truth_p(-1.0),
-        f64::INFINITY,
+        crate::lowering::LadderSpan {
+            h,
+            endpoint_delta: truth_p(1.0) - truth_p(-1.0),
+        },
+        &crate::lowering::LadderTruth {
+            position: &truth_p,
+            velocity: &truth_v,
+            acceleration: &truth_a,
+        },
+        crate::lowering::LadderBudget {
+            tol: tolerance,
+            velocity: f64::INFINITY,
+        },
         crate::lowering::LadderPolicy {
-            endpoint_anchored: true,
-            enforce_velocity_sign: true,
+            velocity_sign: crate::lowering::VelocitySign::Certified,
             acceleration_monotonicity: None,
             high_degree_span_floor: 0.0,
         },
@@ -2729,7 +2783,7 @@ fn an_endpoint_anchored_fit_never_steps_the_right_seam() {
     .unwrap_or_else(|failure| {
         panic!(
             "a smooth jerk span must fit: u={}, position error {}, acceleration error {}",
-            failure.u, failure.position_error, failure.acceleration_error
+            failure.u, failure.error.position, failure.error.acceleration
         )
     });
     assert_eq!(
@@ -2783,8 +2837,18 @@ fn accepted_seed_intervals_do_not_spend_the_split_budget() {
             .collect()
     };
     let fit = |t_start: f64, t_end: f64, seeds: &[f64]| {
-        crate::shaper::fit_axis_from_signal(0, t_start, t_end, seeds, &sig, tolerance, "test fit")
-            .expect("the sine track must fit")
+        crate::shaper::fit_axis_from_signal(
+            crate::shaper::AxisFit {
+                axis: 0,
+                t_start,
+                t_end,
+                seed_breakpoints: seeds,
+                fit_tol: tolerance,
+                fit_context: "test fit",
+            },
+            &sig,
+        )
+        .expect("the sine track must fit")
     };
     let pieces_in = |track: &nurbs::ScalarNurbs, from: f64, to: f64| -> usize {
         let mut boundaries: Vec<f64> = track
@@ -3555,7 +3619,7 @@ fn lower_to_base_items(
 ) -> Vec<BaseItem> {
     let mut fit = FitStage::new(config.corner).into_driver();
     let mut planner = Planner::new(config);
-    let mut lowerer = Lowerer::new(chains.clone(), home.to_vec(), 0.0);
+    let mut lowerer = Lowerer::new(chains.rest_support(), home.to_vec(), 0.0);
     let mut out = Vec::new();
     let mut collect = |item| {
         out.push(item);

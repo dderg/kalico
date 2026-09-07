@@ -7,32 +7,38 @@ use motion_core::lock_ext::LockExt;
 use motion_core::types::mcu_handle_from_raw;
 use motion_core::worker::StreamWorkerError;
 
+struct PhaseRegisterCall<'a> {
+    op: &'a str,
+    mcu_handle: u32,
+    request: &'a str,
+    response: &'a str,
+    timeout_s: f64,
+    err_ctx: &'a str,
+}
+
 #[pymethods]
 impl PyMotionEngine {
     #[pyo3(signature = (mcu_handle, bus_id, rate, timeout_s = 5.0))]
     fn register_phase_bus(
         &self,
-        py: Python<'_>,
         mcu_handle: u32,
         bus_id: u8,
         rate: u32,
         timeout_s: f64,
     ) -> PyResult<()> {
         let msg = format!("runtime_register_phase_bus bus_id={bus_id} rate={rate}");
-        self.phase_register_call(
-            py,
-            "register_phase_bus",
+        self.phase_register_call(PhaseRegisterCall {
+            op: "register_phase_bus",
             mcu_handle,
-            &msg,
-            "kalico_register_phase_bus_response",
+            request: &msg,
+            response: "kalico_register_phase_bus_response",
             timeout_s,
-            &format!("(bus_id={bus_id})"),
-        )
+            err_ctx: &format!("(bus_id={bus_id})"),
+        })
     }
     #[pyo3(signature = (mcu_handle, motor_idx, bus_id, cs_pin_id, slot_idx, timeout_s = 5.0))]
     fn register_phase_motor(
         &self,
-        py: Python<'_>,
         mcu_handle: u32,
         motor_idx: u8,
         bus_id: u8,
@@ -44,15 +50,14 @@ impl PyMotionEngine {
             "runtime_register_phase_motor motor_idx={motor_idx} \
              bus_id={bus_id} cs_pin_id={cs_pin_id} slot_idx={slot_idx}"
         );
-        self.phase_register_call(
-            py,
-            "register_phase_motor",
+        self.phase_register_call(PhaseRegisterCall {
+            op: "register_phase_motor",
             mcu_handle,
-            &msg,
-            "kalico_register_phase_motor_response",
+            request: &msg,
+            response: "kalico_register_phase_motor_response",
             timeout_s,
-            &format!("(motor_idx={motor_idx} bus_id={bus_id} cs_pin_id={cs_pin_id})"),
-        )
+            err_ctx: &format!("(motor_idx={motor_idx} bus_id={bus_id} cs_pin_id={cs_pin_id})"),
+        })
     }
     fn motion_drain_poll(&self) -> PyResult<bool> {
         self.report_lagging_drain_wait();
@@ -309,17 +314,15 @@ impl PyMotionEngine {
         Ok(map)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn phase_register_call(
-        &self,
-        py: Python<'_>,
-        op: &str,
-        mcu_handle: u32,
-        request: &str,
-        response: &str,
-        timeout_s: f64,
-        err_ctx: &str,
-    ) -> PyResult<()> {
+    fn phase_register_call(&self, call: PhaseRegisterCall<'_>) -> PyResult<()> {
+        let PhaseRegisterCall {
+            op,
+            mcu_handle,
+            request,
+            response,
+            timeout_s,
+            err_ctx,
+        } = call;
         let io = {
             let mcus = self.mcus.lock_ok();
             let conn = mcus.get(&mcu_handle).ok_or_else(|| {
@@ -338,9 +341,11 @@ impl PyMotionEngine {
                 .clone()
         };
         let timeout = std::time::Duration::from_secs_f64(timeout_s);
-        let params = py.detach(|| -> PyResult<_> {
-            io.call(request, response, timeout)
-                .map_err(|e| PyRuntimeError::new_err(format!("{op}: transport error: {e:?}")))
+        let params = Python::attach(|py| {
+            py.detach(|| -> PyResult<_> {
+                io.call(request, response, timeout)
+                    .map_err(|e| PyRuntimeError::new_err(format!("{op}: transport error: {e:?}")))
+            })
         })?;
         let result = params.try_get_i32("result").ok_or_else(|| {
             PyRuntimeError::new_err(format!(

@@ -1,6 +1,6 @@
 use super::*;
 use crate::kinematics::KinematicsModule;
-use crate::mcu_config::{AXIS_X, AXIS_Y, KINEMATICS_COREXY};
+use crate::mcu_config::{AXIS_X, AXIS_Y, KINEMATICS_COREXY, McuHardware};
 use geometry::path::{Line, PathSegment, Segment};
 use geometry::{LawSegment, Move, ScalarLaw, SourceRange, VelocityLimits};
 use trajectory::{MAX_SPAN_SECS, SurfaceMode};
@@ -120,8 +120,11 @@ fn cartesian_cfg(mcu_id: u32, axes: Vec<usize>, ceiling: f64) -> Vec<McuAxisConf
         ethercat: false,
         mcu_id,
         axes,
-        kinematics: 1,
-        max_motor_velocity: vec![ceiling; count],
+        hw: McuHardware {
+            kinematics: 1,
+            max_motor_velocity: vec![ceiling; count],
+            ..Default::default()
+        },
         ..Default::default()
     }]
 }
@@ -131,8 +134,11 @@ fn ec_cfg() -> Vec<McuAxisConfig> {
         ethercat: true,
         mcu_id: 9,
         axes: vec![AXIS_X, AXIS_Y],
-        kinematics: 1,
-        max_motor_velocity: vec![f64::INFINITY; 2],
+        hw: McuHardware {
+            kinematics: 1,
+            max_motor_velocity: vec![f64::INFINITY; 2],
+            ..Default::default()
+        },
         ..Default::default()
     }]
 }
@@ -246,8 +252,11 @@ fn corexy_motor_lanes_are_the_sum_and_difference_of_the_axes() {
         ethercat: false,
         mcu_id: 1,
         axes: vec![AXIS_X, AXIS_Y],
-        kinematics: KINEMATICS_COREXY,
-        max_motor_velocity: vec![f64::INFINITY; 2],
+        hw: McuHardware {
+            kinematics: KINEMATICS_COREXY,
+            max_motor_velocity: vec![f64::INFINITY; 2],
+            ..Default::default()
+        },
         ..Default::default()
     }];
     let seg = analytic_seg([10.0, 4.0, 0.0], 1.0, 0);

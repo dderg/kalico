@@ -751,15 +751,18 @@ fn rebase_after_probe_trip_round_trips_through_cartesian_inversion() {
     // bench's "probe at 197.500,-47.500" from a real (150,245) point).
     use crate::kinematics::KinematicsKind;
     use crate::kinematics::KinematicsModule;
-    use crate::mcu_config::{McuAxisConfig, reanchor_axis_targets};
+    use crate::mcu_config::{McuAxisConfig, McuHardware, reanchor_axis_targets};
     use crate::motion_history::assemble_cartesian_state;
 
     let configs = vec![McuAxisConfig {
         ethercat: false,
-        max_motor_velocity: Vec::new(),
         mcu_id: 1,
         axes: vec![0, 1, 2],
-        kinematics: KinematicsKind::CoreXy as u8,
+        hw: McuHardware {
+            max_motor_velocity: Vec::new(),
+            kinematics: KinematicsKind::CoreXy as u8,
+            ..Default::default()
+        },
         ..Default::default()
     }];
     let cart_x = 150.0;

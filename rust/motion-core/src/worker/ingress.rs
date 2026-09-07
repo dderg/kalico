@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Receiver;
 
 use motion_pipeline::{
-    BarrierAck, CONTIGUITY_EPS_MM, Control, StreamConfig, StreamError, StreamInput,
-    advance_odometer, dist3,
+    BarrierAck, CONTIGUITY_EPS_MM, Control, DispatchCommand, StreamConfig, StreamError,
+    StreamInput, advance_odometer, dist3,
 };
 
 use super::dispatch::WorkerLinks;
@@ -115,7 +115,9 @@ impl Ingress {
             };
         }
         let (tx, rx) = crossbeam_channel::bounded(1);
-        self.send(StreamInput::Control(Control::Barrier(tx)));
+        self.send(StreamInput::Control(Control::Dispatch(
+            DispatchCommand::Barrier(tx),
+        )));
         let ack = match rx.recv() {
             Ok(ack) => ack,
             Err(_) if self.links.shutting_down.load(Ordering::Acquire) => BarrierAck {
@@ -350,12 +352,14 @@ impl Ingress {
         let profile =
             crate::nudge::plan_nudge_profile(p.axis, p.delta_mm, p.speed, p.accel, self.t_next)?;
         let total_dur = profile.duration();
-        self.send(StreamInput::Control(Control::Nudge {
-            mcu_id: p.mcu_id,
-            axis: p.axis,
-            motor_mask: p.motor_mask,
-            profile,
-        }));
+        self.send(StreamInput::Control(Control::Dispatch(
+            DispatchCommand::Nudge {
+                mcu_id: p.mcu_id,
+                axis: p.axis,
+                motor_mask: p.motor_mask,
+                profile,
+            },
+        )));
         if total_dur > 0.0 {
             self.send(StreamInput::Control(Control::Dwell { secs: total_dur }));
         }

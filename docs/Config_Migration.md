@@ -231,7 +231,7 @@ they belong to.
 | `[printer] max_z_velocity` | `[printer] max_z_velocity` (must be `<= max_velocity`) |
 | `[printer] max_z_accel` | `[printer] max_z_accel` (must be `<= max_accel`) |
 | `[printer] square_corner_velocity` | Still accepted as a legacy alias. The canonical option is `[printer] corner_deviation` (= `scv² · (√2 − 1) / max_accel`). Set exactly one. |
-| `[printer] max_jerk` | `[printer] max_jerk` |
+| `[printer] max_jerk` | Still parsed, but only `max_jerk: 0` (unlimited) is accepted; a finite jerk limit is rejected at config load. |
 | `[printer] max_path_deviation` | Same option; fitter path-deviation tolerance. |
 | `[printer] max_accel_deviation` | Same option; fitter acceleration-deviation tolerance. |
 | `[extruder] max_extrude_only_velocity` | Same option. |

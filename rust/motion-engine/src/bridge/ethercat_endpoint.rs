@@ -206,34 +206,37 @@ fn push_drive_flags(args: &mut Vec<String>, d: &EthercatDrive) {
     }
 }
 
-pub(crate) fn endpoint_args(
-    interface: &str,
-    socket_path: &str,
-    cycle_us: u32,
-    dynamics_profile: Option<&str>,
-    late_tolerance_us: Option<f64>,
-    group_delay_us: f64,
-    events_dir: Option<&std::path::Path>,
-    drives: &[EthercatDrive],
-) -> Vec<String> {
+/// How the endpoint process is launched, independent of the drives it serves.
+#[derive(Clone, Copy)]
+pub(crate) struct EndpointLaunch<'a> {
+    pub(crate) interface: &'a str,
+    pub(crate) socket_path: &'a str,
+    pub(crate) cycle_us: u32,
+    pub(crate) dynamics_profile: Option<&'a str>,
+    pub(crate) late_tolerance_us: Option<f64>,
+    pub(crate) group_delay_us: f64,
+    pub(crate) events_dir: Option<&'a std::path::Path>,
+}
+
+pub(crate) fn endpoint_args(launch: EndpointLaunch<'_>, drives: &[EthercatDrive]) -> Vec<String> {
     let mut args = vec![
-        interface.to_string(),
+        launch.interface.to_string(),
         "--socket".into(),
-        socket_path.to_string(),
+        launch.socket_path.to_string(),
         "--cycle-us".into(),
-        cycle_us.to_string(),
+        launch.cycle_us.to_string(),
     ];
-    if let Some(p) = dynamics_profile {
+    if let Some(p) = launch.dynamics_profile {
         args.push("--dynamics-profile".into());
         args.push(p.to_string());
     }
-    if let Some(tol) = late_tolerance_us {
+    if let Some(tol) = launch.late_tolerance_us {
         args.push("--late-tolerance-us".into());
         args.push(tol.to_string());
     }
     args.push("--group-delay-us".into());
-    args.push(group_delay_us.to_string());
-    if let Some(dir) = events_dir {
+    args.push(launch.group_delay_us.to_string());
+    if let Some(dir) = launch.events_dir {
         args.push("--events-dir".into());
         args.push(dir.to_string_lossy().into_owned());
     }
@@ -253,25 +256,10 @@ pub(crate) fn endpoint_args(
 
 pub(crate) fn spawn_ethercat_endpoint(
     binary: &str,
-    interface: &str,
-    socket_path: &str,
-    cycle_us: u32,
-    dynamics_profile: Option<&str>,
-    late_tolerance_us: Option<f64>,
-    group_delay_us: f64,
-    events_dir: Option<&std::path::Path>,
+    launch: EndpointLaunch<'_>,
     drives: &[EthercatDrive],
 ) -> Result<std::process::Child, String> {
-    let args = endpoint_args(
-        interface,
-        socket_path,
-        cycle_us,
-        dynamics_profile,
-        late_tolerance_us,
-        group_delay_us,
-        events_dir,
-        drives,
-    );
+    let args = endpoint_args(launch, drives);
     std::process::Command::new(binary)
         .args(&args)
         .spawn()

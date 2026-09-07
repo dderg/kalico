@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use geometry::{CornerFitConfig, VelocityLimits};
 use motion_core::enqueue::{EnqueueCtx, enqueue_segment};
-use motion_core::mcu_config::{LaneKind, McuAxisConfig, StepcompressEncoder};
+use motion_core::mcu_config::{LaneKind, McuAxisConfig, McuHardware, StepcompressEncoder};
 use motion_core::pump::MAX_LEAD_SECS;
 use motion_core::seam_test_harness::{collect_shaped_segments_scripted, parse_gcode_to_moves};
 use motion_pipeline::StreamConfig;
@@ -56,20 +56,22 @@ fn mcu_config() -> McuAxisConfig {
     McuAxisConfig {
         mcu_id: 0,
         axes: vec![0, 1, 2, 3],
-        kinematics: KINEMATICS_COREXY,
         lane_kinds: vec![LaneKind::Pulse; 4],
-        max_motor_velocity: vec![f64::INFINITY; 4],
         ethercat: false,
-        motor_counts: vec![1; 4],
-        microstep_distance: MICROSTEP_MM.to_vec(),
-        invert_dir: vec![false; 4],
-        stepper_oids: vec![0, 1, 2, 3],
-        move_queue_slots: 1024,
-        step_pulse_seconds: vec![0.0; 4],
         stepcompress_encoders: vec![StepcompressEncoder::HighPrecision; 4],
-        phase_sample_rate: 0.0,
-        phase_ring_depth: 0,
-        stepcompress_max_error_secs: 0.0,
+        hw: McuHardware {
+            kinematics: KINEMATICS_COREXY,
+            max_motor_velocity: vec![f64::INFINITY; 4],
+            motor_counts: vec![1; 4],
+            microstep_distance: MICROSTEP_MM.to_vec(),
+            invert_dir: vec![false; 4],
+            stepper_oids: vec![0, 1, 2, 3],
+            move_queue_slots: 1024,
+            step_pulse_seconds: vec![0.0; 4],
+            phase_sample_rate: 0.0,
+            phase_ring_depth: 0,
+            stepcompress_max_error_secs: 0.0,
+        },
     }
 }
 

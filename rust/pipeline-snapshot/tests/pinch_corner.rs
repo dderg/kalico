@@ -134,7 +134,11 @@ fn lower_run(planned: &[PlannedMove]) -> Vec<trajectory::ContinuousSegment> {
         lowered.push(item);
         true
     };
-    let mut lowerer = Lowerer::new(trajectory::AxisChainSet::default(), home, 0.0);
+    let mut lowerer = Lowerer::new(
+        trajectory::AxisChainSet::default().rest_support(),
+        home,
+        0.0,
+    );
     for pm in planned {
         let item = PlannedItem::Move(PlannedMove {
             geometry: pm.geometry.clone(),
@@ -145,7 +149,7 @@ fn lower_run(planned: &[PlannedMove]) -> Vec<trajectory::ContinuousSegment> {
     lowered
         .into_iter()
         .filter_map(|item| match item {
-            BaseItem::Seg(seg) => Some(seg.segment),
+            BaseItem::Seg(seg) => Some(seg),
             _ => None,
         })
         .collect()

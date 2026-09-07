@@ -228,7 +228,7 @@ where
     let mut out = Vec::new();
 
     for cfg in mcu_configs {
-        let module = KinematicsModule::from_tag(cfg.kinematics)
+        let module = KinematicsModule::from_tag(cfg.hw.kinematics)
             .expect("build_mcu_configs validated the kinematics tag");
 
         for &axis_idx in &cfg.axes {

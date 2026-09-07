@@ -87,6 +87,52 @@ pub enum ProfileError {
     PairNotParallel(usize),
 }
 
+struct FrameSpec {
+    n_slots: usize,
+    n_modes: usize,
+    frame: Vec<f64>,
+}
+
+struct Labels {
+    axes: Vec<String>,
+    modes: Vec<String>,
+}
+
+struct ModeDynamics {
+    mass: Vec<f64>,
+    viscous: Vec<f64>,
+    coulomb: Vec<f64>,
+    compliance: Vec<f64>,
+}
+
+struct PinDynamics {
+    mass: Vec<f64>,
+    zeta: Vec<f64>,
+    lead_us: f64,
+}
+
+#[derive(Clone, Copy)]
+pub struct FrameParts<'a> {
+    pub n_slots: usize,
+    pub n_modes: usize,
+    pub frame: &'a [f32],
+}
+
+#[derive(Clone, Copy)]
+pub struct ModeParts<'a> {
+    pub mass: &'a [f32],
+    pub viscous: &'a [f32],
+    pub coulomb: &'a [f32],
+    pub compliance: &'a [f32],
+}
+
+#[derive(Clone, Copy)]
+pub struct PinParts<'a> {
+    pub mass: &'a [f32],
+    pub zeta: &'a [f32],
+    pub lead_us: f64,
+}
+
 #[derive(Debug)]
 pub struct DynamicsModel {
     pub n_slots: usize,
@@ -178,74 +224,93 @@ impl DynamicsModel {
             });
         }
         Self::validated(
-            n_slots,
-            n_modes,
-            f.axes,
-            f.modes,
-            frame,
-            f.mass,
-            f.viscous,
-            f.coulomb,
-            f.compliance,
+            FrameSpec {
+                n_slots,
+                n_modes,
+                frame,
+            },
+            Labels {
+                axes: f.axes,
+                modes: f.modes,
+            },
+            ModeDynamics {
+                mass: f.mass,
+                viscous: f.viscous,
+                coulomb: f.coulomb,
+                compliance: f.compliance,
+            },
+            PinDynamics {
+                mass: f.pin_mass,
+                zeta: f.pin_zeta,
+                lead_us: f.pin_lead_us,
+            },
             f.ff_lead_us,
-            f.pin_mass,
-            f.pin_zeta,
-            f.pin_lead_us,
             &pairs,
         )
     }
 
     pub fn from_parts(
-        n_slots: usize,
-        n_modes: usize,
-        frame: &[f32],
-        mass: &[f32],
-        viscous: &[f32],
-        coulomb: &[f32],
-        compliance: &[f32],
-        pin_mass: &[f32],
-        pin_zeta: &[f32],
-        pin_lead_us: f64,
+        shape: FrameParts<'_>,
+        mode_parts: ModeParts<'_>,
+        pin_parts: PinParts<'_>,
         pairs: &[PairSpec],
     ) -> Result<Self, ProfileError> {
+        let FrameParts {
+            n_slots,
+            n_modes,
+            frame,
+        } = shape;
         let axes = (0..n_slots).map(|i| format!("slot{i}")).collect();
         let modes = (0..n_modes).map(|k| format!("mode{k}")).collect();
         let widen = |v: &[f32]| v.iter().map(|&x| f64::from(x)).collect::<Vec<f64>>();
         Self::validated(
-            n_slots,
-            n_modes,
-            axes,
-            modes,
-            widen(frame),
-            widen(mass),
-            widen(viscous),
-            widen(coulomb),
-            widen(compliance),
+            FrameSpec {
+                n_slots,
+                n_modes,
+                frame: widen(frame),
+            },
+            Labels { axes, modes },
+            ModeDynamics {
+                mass: widen(mode_parts.mass),
+                viscous: widen(mode_parts.viscous),
+                coulomb: widen(mode_parts.coulomb),
+                compliance: widen(mode_parts.compliance),
+            },
+            PinDynamics {
+                mass: widen(pin_parts.mass),
+                zeta: widen(pin_parts.zeta),
+                lead_us: pin_parts.lead_us,
+            },
             0.0,
-            widen(pin_mass),
-            widen(pin_zeta),
-            pin_lead_us,
             pairs,
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn validated(
-        n_slots: usize,
-        n_modes: usize,
-        axes: Vec<String>,
-        modes: Vec<String>,
-        frame: Vec<f64>,
-        mass: Vec<f64>,
-        viscous: Vec<f64>,
-        coulomb: Vec<f64>,
-        compliance: Vec<f64>,
+        shape: FrameSpec,
+        labels: Labels,
+        mode_dyn: ModeDynamics,
+        pin: PinDynamics,
         ff_lead_us: f64,
-        pin_mass: Vec<f64>,
-        pin_zeta: Vec<f64>,
-        pin_lead_us: f64,
         pairs: &[PairSpec],
     ) -> Result<Self, ProfileError> {
+        let FrameSpec {
+            n_slots,
+            n_modes,
+            frame,
+        } = shape;
+        let Labels { axes, modes } = labels;
+        let ModeDynamics {
+            mass,
+            viscous,
+            coulomb,
+            compliance,
+        } = mode_dyn;
+        let PinDynamics {
+            mass: pin_mass,
+            zeta: pin_zeta,
+            lead_us: pin_lead_us,
+        } = pin;
         if axes.len() != n_slots {
             return Err(ProfileError::Dim("axes length must equal slots"));
         }
