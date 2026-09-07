@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Select, TryRecvError};
@@ -7,16 +7,16 @@ use crossbeam_channel::{Receiver, Select, TryRecvError};
 use super::diag;
 use super::drip::DripCohort;
 use super::junction::{JunctionTracker, check_junction_position_continuity};
-use super::memstat::MemPressureProbe;
 use super::messages::{
-    BuzzParams, BuzzStart, BuzzToken, BuzzTransport, DrainTick, HeartbeatMsg, HistoryRecorder,
-    LaneProjection, PumpCallbacks, PumpMsg, SendError, SpanSink,
+    BuzzParams, BuzzStart, BuzzToken, BuzzTransport, DrainTick, HeartbeatMsg, LaneProjection,
+    PumpCallbacks, PumpMsg, SendError, SpanSink,
 };
 use super::sched::{
     AxisFrame, AxisQueue, FramePlan, LaneRelease, ReleasePlan, Schedule,
     append_spans_merging_holds, schedule,
 };
 use super::stall::ConsumptionStallWatch;
+use crate::lock_ext::LockExt;
 use crate::types::AxisKey;
 use trajectory::ClockedMotorSpan;
 
@@ -125,13 +125,12 @@ pub(crate) struct Pump<S> {
     pub(super) halted: BTreeMap<AxisKey, HaltKind>,
     pub(super) sink: S,
     pub(super) callbacks: PumpCallbacks,
-    pub(crate) history: Option<HistoryRecorder>,
+    pub(crate) history: Option<Arc<Mutex<crate::motion_history::HistoryStore>>>,
     pub(super) ledger: Arc<crate::drain::DrainLedger>,
     pub(super) pending_barrier_acks: Vec<std::sync::mpsc::SyncSender<()>>,
     pub(super) release_plan: ReleasePlan,
     pub(super) data_open: bool,
     pub(super) consumption_stall: ConsumptionStallWatch,
-    pub(super) mem_probe: MemPressureProbe,
     pub(crate) fatal_reason: Option<String>,
 }
 
@@ -173,13 +172,13 @@ impl<S: SpanSink> Pump<S> {
                     queue
                         .credit
                         .interrupt(credits.iter().filter(|cut| cut.key == key).map(|cut| {
-                            execution_credit::Cut {
+                            crate::pump::execution_credit::Cut {
                                 source: cut.by as usize,
-                                before: execution_credit::Progress {
+                                before: crate::pump::execution_credit::Progress {
                                     consumed: cut.before.0,
                                     retired: cut.before.1,
                                 },
-                                after: execution_credit::Progress {
+                                after: crate::pump::execution_credit::Progress {
                                     consumed: cut.after.0,
                                     retired: cut.after.1,
                                 },
@@ -305,7 +304,7 @@ impl<S: SpanSink> Pump<S> {
                     if let Some(q) = self.queues.get_mut(&key) {
                         q.credit.observe(
                             retired_by as usize,
-                            execution_credit::Progress {
+                            crate::pump::execution_credit::Progress {
                                 consumed: consumed_counts[slot],
                                 retired: c,
                             },
@@ -1041,7 +1040,6 @@ impl<S: SpanSink> Pump<S> {
         mcu_id: u32,
         bundle: &[AxisFrame],
     ) -> (bool, Result<(), SendError>) {
-        let mem_before = self.mem_probe.sample();
         let send_started = Instant::now();
         let send_result = self.sink.send_mcu_frames(mcu_id, bundle);
         let accepted = send_result.is_ok();
@@ -1057,16 +1055,6 @@ impl<S: SpanSink> Pump<S> {
         };
         let send_elapsed = send_started.elapsed();
         if send_elapsed >= Duration::from_millis(5) {
-            let mem_after = self.mem_probe.sample();
-            let (majflt_delta, vm_swap_before_kb, vm_swap_after_kb) = match (mem_before, mem_after)
-            {
-                (Some(before), Some(after)) => (
-                    Some(after.majflt.saturating_sub(before.majflt)),
-                    Some(before.vm_swap_kb),
-                    Some(after.vm_swap_kb),
-                ),
-                _ => (None, None, None),
-            };
             tracing::warn!(
                 subsystem = "motion",
                 event = "pump_send_blocked",
@@ -1074,17 +1062,11 @@ impl<S: SpanSink> Pump<S> {
                 elapsed_ms = send_elapsed.as_millis() as u64,
                 frames = bundle.len(),
                 ok = send_result.is_ok(),
-                majflt_delta,
-                vm_swap_before_kb,
-                vm_swap_after_kb,
-                "[pump-send] send_mcu_frames blocked {}ms on mcu {} ({} frames, ok={}, majflt_delta={:?}, vm_swap_kb={:?}->{:?})",
+                "[pump-send] send_mcu_frames blocked {}ms on mcu {} ({} frames, ok={})",
                 send_elapsed.as_millis() as u64,
                 mcu_id,
                 bundle.len(),
-                send_result.is_ok(),
-                majflt_delta,
-                vm_swap_before_kb,
-                vm_swap_after_kb
+                send_result.is_ok()
             );
         }
         (accepted, send_result)
@@ -1115,7 +1097,7 @@ impl<S: SpanSink> Pump<S> {
                     q.staged_motion = q.staged_motion.saturating_sub(1);
                 }
                 if let Some(history) = &self.history {
-                    if let Err(error) = history.record(key, span) {
+                    if let Err(error) = history.lock_ok().record(key, span) {
                         panic!(
                             "mcu{} axis{}: motion history rejected a dispatched span: {error}",
                             key.mcu_id, key.axis
@@ -1449,7 +1431,7 @@ impl<S: SpanSink> Pump<S> {
     pub(crate) fn new(
         sink: S,
         callbacks: PumpCallbacks,
-        history: Option<HistoryRecorder>,
+        history: Option<Arc<Mutex<crate::motion_history::HistoryStore>>>,
         ledger: Arc<crate::drain::DrainLedger>,
     ) -> Self {
         Self {
@@ -1465,7 +1447,6 @@ impl<S: SpanSink> Pump<S> {
             release_plan: ReleasePlan::default(),
             data_open: true,
             consumption_stall: ConsumptionStallWatch::new(CONSUMPTION_STALL_FATAL),
-            mem_probe: MemPressureProbe::new(),
             fatal_reason: None,
         }
     }
@@ -1477,7 +1458,7 @@ pub fn run_projection_batches<S: SpanSink>(
     data_rx: Receiver<Vec<LaneProjection>>,
     sink: S,
     callbacks: PumpCallbacks,
-    history: Option<HistoryRecorder>,
+    history: Option<Arc<Mutex<crate::motion_history::HistoryStore>>>,
     ledger: Arc<crate::drain::DrainLedger>,
 ) {
     Pump::new(sink, callbacks, history, ledger).run(

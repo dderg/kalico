@@ -4,7 +4,7 @@ import sys
 import tempfile
 import time
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 CONFIG_PHASE_OK = "Motion: config phase complete"
 CONFIG_PHASE_FAILED = "Config error"

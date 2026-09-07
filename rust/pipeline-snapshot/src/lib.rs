@@ -23,6 +23,7 @@ pub mod waypoints;
 
 use motion_pipeline::{Pipeline, StreamConfig, TrajectoryItem};
 
+pub use geometry::corner_deviation_from_scv;
 pub use planner_config::{AxisDecl, PostProcessorDecl};
 
 pub const SNAPSHOT_SCHEMA_VERSION: u32 = 3;
@@ -62,10 +63,7 @@ pub enum SnapshotError {
 pub struct SnapshotParams {
     pub max_velocity: f64,
     pub max_accel: f64,
-    pub square_corner_velocity: f64,
-    /// Direct corner budget in mm — the canonical form; when set,
-    /// `square_corner_velocity` is ignored (it is the legacy alias).
-    pub corner_deviation: Option<f64>,
+    pub corner_deviation: f64,
     pub max_jerk: f64,
     pub max_extrude_only_velocity: Option<f64>,
     pub max_extrude_only_accel: Option<f64>,
@@ -145,14 +143,12 @@ pub fn pipeline_snapshot_streaming(
         return Err(SnapshotError::TooFewWaypoints);
     }
 
-    if let Some(v) = params.corner_deviation {
-        if !(v.is_finite() && v >= 0.0) {
-            return Err(SnapshotError::InvalidCornerDeviation(v));
-        }
+    if !(params.corner_deviation.is_finite() && params.corner_deviation >= 0.0) {
+        return Err(SnapshotError::InvalidCornerDeviation(
+            params.corner_deviation,
+        ));
     }
-    let corner_deviation_mm = params.corner_deviation.unwrap_or_else(|| {
-        geometry::corner_deviation_from_scv(params.square_corner_velocity, params.max_accel)
-    });
+    let corner_deviation_mm = params.corner_deviation;
     let limits = geometry::VelocityLimits::try_new(
         params.max_velocity,
         params.max_accel,
@@ -366,21 +362,7 @@ fn build_axis_chains(params: &SnapshotParams) -> Result<AxisChainSet, String> {
 
 /// The third element is the toolhead signal — the shaped segments before the
 /// motor-side derivative-gain stages — present exactly when some chain makes
-/// the motor command depart from it.
-pub fn run_pipeline(
-    moves: &[geometry::Move],
-    config: StreamConfig,
-    axis_chains: AxisChainSet,
-) -> (
-    Vec<geometry::Move>,
-    Vec<ContinuousSegment>,
-    Option<Vec<ContinuousSegment>>,
-) {
-    run_pipeline_streaming(moves, config, axis_chains, |_, _| {})
-}
-
-/// Same computation as [`run_pipeline`] — the stages see the identical item
-/// sequence, so the output is bit-identical — but the four stages are driven
+/// the motor command depart from it. The four stages are driven
 /// cooperatively on the calling thread, one input move at a time, and
 /// `on_progress(shaped_so_far, toolhead_so_far)` runs after each move's
 /// effects have propagated all the way through the shaper. That is what lets

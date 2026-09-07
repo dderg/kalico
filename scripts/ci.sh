@@ -73,8 +73,6 @@ host_cargo() {
     fi
 }
 
-job_rust_build()  { cd "$RUST" && cargo build --workspace; }
-
 job_rust_test() {
     cd "$RUST"
     host_cargo nextest run --workspace --profile ci
@@ -99,9 +97,6 @@ job_rust_fuzz() {
 job_rust_clippy() { cd "$RUST" && cargo clippy --workspace --all-targets -- -D warnings; }
 job_rust_fmt()    { cd "$RUST" && cargo fmt --all -- --check; }
 job_public_api()  { "$ROOT/scripts/public-api.sh"; }
-
-job_rust_host()   { job_rust_test && job_rust_clippy && job_rust_fmt; }
-
 job_rust_loom() {
     cd "$RUST"
     RUSTFLAGS="--cfg loom" cargo test -p runtime --release \
@@ -397,8 +392,6 @@ esac
 
 name="$1"; shift
 case "$name" in
-    rust-host)        job=(job_rust_host) ;;
-    rust-build)       job=(job_rust_build) ;;
     rust-test)        job=(job_rust_test) ;;
     rust-fuzz)        job=(job_rust_fuzz) ;;
     rust-clippy)      job=(job_rust_clippy) ;;

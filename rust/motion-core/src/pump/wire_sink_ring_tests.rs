@@ -102,7 +102,8 @@ impl RingEndpoint {
                                 ));
                             }
                             Command::SetFfLead { correlation_id, .. } => {
-                                server.respond(&ethercat_rt::wire::set_ff_lead_response_frame(
+                                server.respond(&ethercat_rt::wire::result_frame(
+                                    mcu_protocol::messages::MessageKind::SetFfLeadResponse,
                                     correlation_id,
                                     0,
                                 ));
@@ -779,13 +780,13 @@ fn halt_before_ethercat_progress_abandons_views_without_replay_or_retirement() {
         queue
             .credit
             .interrupt(h.sink.cut_staged(&[key()]).unwrap().into_iter().map(|cut| {
-                execution_credit::Cut {
+                crate::pump::execution_credit::Cut {
                     source: cut.by as usize,
-                    before: execution_credit::Progress {
+                    before: crate::pump::execution_credit::Progress {
                         consumed: cut.before.0,
                         retired: cut.before.1,
                     },
-                    after: execution_credit::Progress {
+                    after: crate::pump::execution_credit::Progress {
                         consumed: cut.after.0,
                         retired: cut.after.1,
                     },
@@ -817,7 +818,7 @@ fn halt_before_ethercat_progress_abandons_views_without_replay_or_retirement() {
     let (consumed, retired) = filler.credit(AXIS);
     queue.credit.observe(
         crate::pump::RetiredBy::EtherCat as usize,
-        execution_credit::Progress { consumed, retired },
+        crate::pump::execution_credit::Progress { consumed, retired },
     );
     assert_eq!(
         (

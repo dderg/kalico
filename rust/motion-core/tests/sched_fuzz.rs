@@ -107,7 +107,7 @@ impl LaneSpec {
         queue.credit.accept(self.pushed);
         queue.credit.observe(
             motion_core::pump::RetiredBy::Pulse as usize,
-            execution_credit::Progress {
+            motion_core::pump::execution_credit::Progress {
                 consumed: self.consumed,
                 retired: 0,
             },

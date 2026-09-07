@@ -215,12 +215,10 @@ endstop_pin: tmc2209_stepper_x:virtual_endstop   # mainline, on [stepper_x]
 endstop_pin: tmc2209_a_motor:virtual_endstop     # fork, on [axis x]
 ```
 
-`use_sensorless_homing` still defaults to true when the endstop is
-virtual, and the homing keys it interacts with — `homing_retract_dist`,
-`homing_retract_speed`, `min_home_dist`, `homing_positive_dir`,
-`second_homing_speed` — all belong on `[axis <name>]`. Putting any of
-them on a `[motor <name>]` is rejected with a message naming the axis
-they belong to.
+The homing keys — `homing_retract_dist`, `homing_retract_speed`,
+`min_home_dist`, `homing_positive_dir` — all belong on `[axis <name>]`.
+Putting any of them on a `[motor <name>]` is rejected with a message
+naming the axis they belong to.
 
 ## Option mapping
 

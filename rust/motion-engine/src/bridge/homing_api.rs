@@ -365,7 +365,7 @@ impl PyMotionEngine {
             let router = self.router.lock_ok();
             motion_core::motion_history::clock_to_host(
                 &router,
-                motion_core::types::mcu_handle_from_raw(source_mcu),
+                host_rt::passthrough_queue::McuHandle::from_raw(source_mcu),
                 clock,
             )
             .map_err(PyRuntimeError::new_err)?

@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::{
-    HomingRun, HomingState, McuAxisConfig, McuConnection, PassthroughRouter, RemoteFreeze,
+    HomingRun, HomingState, McuAxisConfig, McuConnection, McuHandle, PassthroughRouter,
+    RemoteFreeze,
 };
 
 #[derive(Clone)]
@@ -173,9 +174,7 @@ pub(super) fn dispatch_endstop_trip(
                             let reference = deps
                                 .router
                                 .lock_ok()
-                                .compute_ack_clock(motion_core::types::mcu_handle_from_raw(
-                                    freeze.motor_mcu,
-                                ))
+                                .compute_ack_clock(McuHandle::from_raw(freeze.motor_mcu))
                                 .unwrap_or(0);
                             suppression_clock = Some((
                                 freeze.motor_mcu,

@@ -252,10 +252,7 @@ impl WireSink {
 }
 
 impl SpanSink for WireSink {
-    fn endpoint_control(
-        &self,
-        command: super::EndpointCommand,
-    ) -> Result<super::EndpointReply, String> {
+    fn endpoint_control(&self, command: super::EndpointCommand) -> Result<(), String> {
         self.handle_endpoint_command(command)
     }
 

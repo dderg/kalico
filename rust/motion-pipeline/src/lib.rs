@@ -19,7 +19,7 @@ use shaper::Shaper;
 pub use lower_stage::Lowerer;
 pub use types::{
     BarrierAck, BaseItem, CONTIGUITY_EPS_MM, Control, DispatchCommand, PlannedItem, StreamConfig,
-    StreamError, StreamInput, TrajectoryItem, advance_odometer, dist3,
+    StreamError, StreamInput, TrajectoryItem, advance_odometer,
 };
 
 pub struct Pipeline {

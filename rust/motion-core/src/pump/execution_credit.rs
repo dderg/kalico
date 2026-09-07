@@ -1,5 +1,3 @@
-#![no_std]
-
 //! Accounting for accepted work across independently reporting execution sources.
 //!
 //! Consumption releases input storage; retirement confirms execution. Interruption
@@ -151,3 +149,7 @@ impl<const SOURCES: usize> ExecutionCredit<SOURCES> {
             .wrapping_sub(self.totals.abandoned)
     }
 }
+
+#[cfg(test)]
+#[path = "execution_credit_tests.rs"]
+mod execution_credit_tests;

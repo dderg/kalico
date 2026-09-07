@@ -358,11 +358,6 @@ impl AxisRegistry {
     }
 
     #[must_use]
-    pub fn is_spatial(&self, index: usize) -> bool {
-        index < SPATIAL.len()
-    }
-
-    #[must_use]
     pub fn axis_name(&self, index: usize) -> &str {
         &self.ordered[index].name
     }
@@ -385,19 +380,6 @@ impl AxisRegistry {
                     .map(|t| self.axis_index(t).expect("follows validated in try_new"))
                     .collect();
                 (idx, followed)
-            })
-            .collect()
-    }
-
-    #[must_use]
-    pub fn follower_words(&self) -> Vec<geometry::FollowerWord> {
-        self.ordered
-            .iter()
-            .enumerate()
-            .skip(SPATIAL.len())
-            .map(|(axis_index, d)| geometry::FollowerWord {
-                letter: d.name.as_bytes()[0].to_ascii_uppercase(),
-                axis_index,
             })
             .collect()
     }

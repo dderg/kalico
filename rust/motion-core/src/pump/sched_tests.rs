@@ -169,7 +169,7 @@ fn a_consumed_view_frees_the_ring_slot_ahead_of_retirement() {
 
     queues.get_mut(&key).unwrap().credit.observe(
         RetiredBy::Pulse as usize,
-        execution_credit::Progress {
+        crate::pump::execution_credit::Progress {
             consumed: 1,
             retired: 0,
         },

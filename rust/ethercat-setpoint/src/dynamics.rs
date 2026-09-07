@@ -2,7 +2,7 @@ use serde::Deserialize;
 
 /// Must match the serval-dashboard fitter's coulomb deadband: the fit excludes
 /// |v| below this from the coulomb regression, so the runtime ramps through it.
-pub const COULOMB_DEADBAND_MM_S: f32 = 0.5;
+const COULOMB_DEADBAND_MM_S: f32 = 0.5;
 
 pub const ERR_DYNAMICS_BAD_DIM: i32 = -861;
 pub const ERR_DYNAMICS_REJECTED: i32 = -862;
@@ -12,7 +12,7 @@ const PIN_LEAD_US_MAX: f64 = 10_000.0;
 
 /// Compliance ceiling: 1/(2π·20 Hz)² — a mode softer than 20 Hz is not a
 /// belt-stretch correction, it's a typo (units are s², value = 1/ω_b²).
-pub const COMPLIANCE_MAX_S2: f64 = 6.34e-5;
+const COMPLIANCE_MAX_S2: f64 = 6.34e-5;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,9 +32,6 @@ struct ProfileFile {
     coulomb: Vec<f64>,
     #[serde(default)]
     compliance: Vec<f64>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    fit_rms_residual: Vec<f64>,
     #[serde(default)]
     pair: Vec<PairTable>,
     #[serde(default)]
@@ -471,15 +468,6 @@ impl DynamicsModel {
     /// reaction instead of applying the position/velocity lead.
     pub fn pin_active(&self, mode: usize) -> bool {
         self.pin_mass.get(mode).is_some_and(|&m| m > 0.0)
-    }
-
-    /// Pin predictor phase lead per slot in nanoseconds, mirroring
-    /// `ff_lead_ns`.
-    pub fn pin_lead_ns(&self) -> Vec<u64> {
-        self.pin_lead_us
-            .iter()
-            .map(|&us| (us * 1000.0).round() as u64)
-            .collect()
     }
 
     /// Frame row for mode `mode` (length `n_slots`): the per-slot weights

@@ -2,7 +2,7 @@ use super::*;
 use crate::mcu_config::{LaneKind, McuAxisConfig, McuHardware, StepcompressEncoder};
 use crate::pump::pump_past_guard_secs;
 use host_rt::clock::{Clock, MockClock};
-use host_rt::passthrough_queue::PassthroughRouter;
+use host_rt::passthrough_queue::{McuHandle, PassthroughRouter};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
@@ -62,12 +62,7 @@ fn seed_clock_for(
     last_clock: u64,
 ) {
     router
-        .set_clock_est(
-            crate::types::mcu_handle_from_raw(mcu_id),
-            freq,
-            offset_est,
-            last_clock,
-        )
+        .set_clock_est(McuHandle::from_raw(mcu_id), freq, offset_est, last_clock)
         .unwrap();
 }
 
@@ -91,7 +86,7 @@ fn first_volley_clock(sink: &mut Projection, host_now: f64) -> u64 {
 /// every frame's start clock against.
 fn egress_guard_passes(router: &PassthroughRouter, first_clock: u64, freq: f64) -> bool {
     let (live_now, live_freq) = router
-        .ack_clock_and_freq(crate::types::mcu_handle_from_raw(MCU_ID))
+        .ack_clock_and_freq(McuHandle::from_raw(MCU_ID))
         .expect("synced");
     let guard_ticks = (pump_past_guard_secs() * live_freq) as u64;
     let _ = freq;
@@ -141,7 +136,7 @@ fn a_healthy_clocksync_lands_the_first_volley_lead_seconds_ahead_of_the_true_clo
     let live_freq = sink
         .router
         .lock_ok()
-        .ack_clock_and_freq(crate::types::mcu_handle_from_raw(MCU_ID))
+        .ack_clock_and_freq(McuHandle::from_raw(MCU_ID))
         .unwrap()
         .1;
 
@@ -205,7 +200,7 @@ fn a_clock_record_lagging_the_true_mcu_puts_the_first_volley_past_and_blinds_the
     let live_freq = sink
         .router
         .lock_ok()
-        .ack_clock_and_freq(crate::types::mcu_handle_from_raw(MCU_ID))
+        .ack_clock_and_freq(McuHandle::from_raw(MCU_ID))
         .unwrap()
         .1;
 
@@ -405,7 +400,7 @@ fn a_reanchor_reseeds_from_the_live_clock_not_the_drifted_frozen_slope() {
     let live_now_at_reanchor = sink
         .router
         .lock_ok()
-        .host_time_to_mcu_clock(crate::types::mcu_handle_from_raw(MCU_ID), seam2)
+        .host_time_to_mcu_clock(McuHandle::from_raw(MCU_ID), seam2)
         .unwrap();
 
     let drift_secs = (chained_would_be as f64 - live_now_at_reanchor as f64) / F_TRUE;

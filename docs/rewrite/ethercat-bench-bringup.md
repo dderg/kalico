@@ -360,9 +360,9 @@ on the drive's retained state. A failure to write that remap is `rc=-6`
 ## Fault-response reference
 - The endpoint has **no fixed millisecond lateness window**. Every fault below is a `RingFault` variant in `rust/ethercat-setpoint/src/setpoint.rs`; each latches into the same allocation-free atomic and reports `engine_state=Fault` in the `StatusHeartbeat`. Response is host-coordinated shutdown (mirrors the MCU model); the hw binary additionally disables the drive as a local backstop. None of them silently holds the last position.
 - Pacing faults:
-  - **`Underrun { tail_vel_counts_s }`** (`RUNTIME_ERR_SAMPLE_RING_UNDERRUN`) — the ring drained while the last played entry still carried velocity: the host fell behind mid-motion. This is the real "pump too slow" signal.
-  - **`RunLate { deficit_us }`** (`RUNTIME_ERR_SAMPLE_RUN_LATE`) — a delivered run covers cycles the ring has already played; `deficit_us` is how late it was.
-  - **`RingFull { free_cycles, asked }`** (`RUNTIME_ERR_SAMPLE_RING_FULL`) — the host pushed past the ring's headroom, i.e. ran too far ahead.
+  - **`Underrun { tail_vel_counts_s }`** (`FaultCode::SampleRingUnderrun`) — the ring drained while the last played entry still carried velocity: the host fell behind mid-motion. This is the real "pump too slow" signal.
+  - **`RunLate { deficit_us }`** (`FaultCode::SampleRunLate`) — a delivered run covers cycles the ring has already played; `deficit_us` is how late it was.
+  - **`RingFull { free_cycles, asked }`** (`FaultCode::SampleRingFull`) — the host pushed past the ring's headroom, i.e. ran too far ahead.
 - Divergence guards (loud, not pacing):
   - **`OriginShift { expected_nm, got_nm }`** — a lane's `pos_counts == 0` reference moved without a re-anchor.
   - **`GridRegression`** — the playback grid index went backwards.

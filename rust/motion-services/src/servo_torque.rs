@@ -4,10 +4,10 @@ use host_rt::mcu_serial_conn::McuSerialConn;
 use mcu_protocol::codec::Encode as _;
 use mcu_protocol::messages::{
     ArmSensorlessEndstop, ArmSensorlessEndstopResponse, DriveLimitEntry, MessageKind,
-    ResonanceBuzz, ResonanceBuzzResponse, RestoreDriveLimits, RestoreDriveLimitsResponse,
-    SeedServoHome, SeedServoHomeResponse, SetDiffDamper, SetDiffDamperResponse, SetDiffTrim,
-    SetDiffTrimResponse, SetDriveLimits, SetDriveLimitsResponse, SetStrainComp,
-    SetStrainCompResponse, SetTorque, SetTorqueResponse, StopResponse,
+    RestoreDriveLimits, RestoreDriveLimitsResponse, SeedServoHome, SeedServoHomeResponse,
+    SetDiffDamper, SetDiffDamperResponse, SetDiffTrim, SetDiffTrimResponse, SetDriveLimits,
+    SetDriveLimitsResponse, SetStrainComp, SetStrainCompResponse, SetTorque, SetTorqueResponse,
+    StopResponse,
 };
 
 use crate::servo_call::mcu_typed_call;
@@ -122,21 +122,6 @@ pub fn send_stop(conn: &McuSerialConn) -> Result<i32, String> {
         MessageKind::StopResponse,
         Vec::new(),
         STOP_TIMEOUT,
-    )?;
-    Ok(r.result)
-}
-
-const RESONANCE_BUZZ_TIMEOUT: Duration = Duration::from_secs(5);
-
-pub fn send_resonance_buzz(conn: &McuSerialConn, buzz: ResonanceBuzz) -> Result<i32, String> {
-    let body = buzz.encoded_to_vec();
-    let r: ResonanceBuzzResponse = mcu_typed_call(
-        conn,
-        "ResonanceBuzz",
-        MessageKind::ResonanceBuzz,
-        MessageKind::ResonanceBuzzResponse,
-        body,
-        RESONANCE_BUZZ_TIMEOUT,
     )?;
     Ok(r.result)
 }

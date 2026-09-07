@@ -7,7 +7,8 @@
 
 use geometry::path::{Arc, Clothoid, Line, PathSegment, Segment};
 use geometry::velocity::law::{LawSegment, ScalarLaw};
-use geometry::{Move, SourceRange, VelocityLimits, plan_velocity_stops};
+use geometry::velocity::plan_velocity_stops;
+use geometry::{Move, SourceRange, VelocityLimits};
 use proptest::prelude::*;
 use proptest::test_runner::FileFailurePersistence;
 

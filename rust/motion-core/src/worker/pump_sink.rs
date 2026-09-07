@@ -1,4 +1,5 @@
 use crate::lock_ext::LockExt;
+use host_rt::passthrough_queue::McuHandle;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -82,7 +83,7 @@ impl Projection {
     fn live_clock_record(&self, mcu_id: u32) -> host_rt::passthrough_queue::ClockRecordSnapshot {
         self.router
             .lock_ok()
-            .clock_record(crate::types::mcu_handle_from_raw(mcu_id))
+            .clock_record(McuHandle::from_raw(mcu_id))
             .unwrap_or_else(|| {
                 panic!(
                     "mcu {mcu_id} projected a span with no valid clocksync record — \
@@ -102,7 +103,7 @@ impl Projection {
     }
 
     fn reanchor_projection(&mut self, mcu_id: u32, host_now: f64) -> Result<(), DispatchError> {
-        let handle = crate::types::mcu_handle_from_raw(mcu_id);
+        let handle = McuHandle::from_raw(mcu_id);
         let record = self
             .router
             .lock_ok()
@@ -277,7 +278,7 @@ impl Projection {
         if self.mcu_has_motion(cfg, seg) {
             return true;
         }
-        let handle = crate::types::mcu_handle_from_raw(cfg.mcu_id);
+        let handle = McuHandle::from_raw(cfg.mcu_id);
         let live = self
             .router
             .lock_ok()
@@ -347,7 +348,7 @@ impl Projection {
     fn log_seg0_lead(&self, mcu_ids: impl Iterator<Item = u32>, seg_start_host: f64, t0: f64) {
         let r = self.router.lock_ok();
         for mcu_id in mcu_ids {
-            let h = crate::types::mcu_handle_from_raw(mcu_id);
+            let h = McuHandle::from_raw(mcu_id);
             r.log_seg0_lead(h, seg_start_host, t0);
         }
     }
@@ -435,7 +436,7 @@ impl Projection {
 
         if at.epoch.retimed() {
             if let Some(history) = &pump.history {
-                history.store.lock_ok().drop_pieces_on_reanchor();
+                history.lock_ok().drop_pieces_on_reanchor();
             }
         }
         for m in msgs {

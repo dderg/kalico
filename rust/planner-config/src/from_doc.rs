@@ -9,9 +9,8 @@
 
 use config_doc::Document;
 
-use crate::{AxisDecl, CartesianLimits, PostProcessorDecl};
+use crate::{AxisDecl, CartesianLimits, DEFAULT_SQUARE_CORNER_VELOCITY_MM_S, PostProcessorDecl};
 
-const DEFAULT_SQUARE_CORNER_VELOCITY: f64 = 5.0;
 const UNSUPPORTED_PRINTER_KEYS: [&str; 2] = ["max_accel_to_decel", "minimum_cruise_ratio"];
 const LEGACY_STEPPER_AXES: [char; 5] = ['x', 'y', 'z', 'a', 'b'];
 const LEGACY_SERVO_SECTIONS: [&str; 3] = ["servo_x", "servo_y", "servo_z"];
@@ -352,7 +351,7 @@ impl Reader<'_> {
             }
             (_, Some(deviation)) => deviation,
             (scv, None) => {
-                let scv = scv.unwrap_or(DEFAULT_SQUARE_CORNER_VELOCITY);
+                let scv = scv.unwrap_or(DEFAULT_SQUARE_CORNER_VELOCITY_MM_S);
                 geometry::corner_deviation_from_scv(scv, max_accel)
             }
         };

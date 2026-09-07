@@ -190,16 +190,9 @@ position_max: 220
 #   Optional. Default is homing_speed. Must be above 0.
 #min_home_dist: 5
 #   Optional. Default is homing_retract_dist. Must be >= 0.
-#use_sensorless_homing: False
-#   Optional. Default is False unless endstop_pin is a virtual endstop.
-#second_homing_speed: 2.5
-#   Optional. Default is homing_speed / 2, or homing_speed for a virtual
-#   endstop. Must be above 0.
 #homing_positive_dir:
 #   Optional. Default is inferred from position_endstop and the travel range;
 #   an ambiguous interior endstop is an error.
-#homing_accel:
-#   Optional. Default is None. If set, must be above 0.
 ```
 
 A dual-motor axis (one motor per gantry side) can carry one switch per motor.

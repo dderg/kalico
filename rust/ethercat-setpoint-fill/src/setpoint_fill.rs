@@ -26,7 +26,6 @@ use trajectory::ClockedMotorSpan;
 
 use crate::buzz::{BuzzOsc, BuzzRoute, BuzzSweep, MAX_BUZZ_SLOTS};
 use ethercat_setpoint::dynamics::DynamicsModel;
-use ethercat_setpoint::scale::mm_to_counts;
 use ethercat_setpoint::setpoint::MAX_FILL_CYCLES;
 
 /// The DC grid is stamped in nanoseconds, so a span's clock map must tick at
@@ -812,7 +811,7 @@ impl ChainFiller {
             let cpm = lane.spec.cmd_counts_per_mm;
             let origin_mm = *lane.origin_mm.get_or_insert(pos_mm);
             let sample = SetpointSample {
-                pos_counts: mm_to_counts(pos_mm - origin_mm, cpm),
+                pos_counts: ((pos_mm - origin_mm) * cpm).round() as i32,
                 vel_ff: (f64::from(self.samples[slot].vel_host) * cpm).round() as i32,
                 torque_ff,
                 acc_mm_s2: self.samples[slot].acc_host,

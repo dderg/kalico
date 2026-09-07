@@ -122,7 +122,7 @@ fn room_full_then_drains() {
     assert_eq!(q.room(), 0);
     q.credit.observe(
         RetiredBy::Pulse as usize,
-        execution_credit::Progress {
+        crate::pump::execution_credit::Progress {
             consumed: 1,
             retired: 0,
         },
@@ -136,7 +136,7 @@ fn consumed_spans_reopen_capacity_before_execution_retires_them() {
     q.credit.accept(64);
     q.credit.observe(
         RetiredBy::Pulse as usize,
-        execution_credit::Progress {
+        crate::pump::execution_credit::Progress {
             consumed: 64,
             retired: 0,
         },
@@ -152,7 +152,7 @@ fn room_correct_across_u32_wrap() {
     q.credit.accept(u32::MAX);
     q.credit.observe(
         RetiredBy::Pulse as usize,
-        execution_credit::Progress {
+        crate::pump::execution_credit::Progress {
             consumed: u32::MAX,
             retired: u32::MAX,
         },
@@ -173,7 +173,7 @@ fn room_recovers_when_consumed_overtakes_pushed() {
     q.credit.accept(100);
     q.credit.observe(
         RetiredBy::Pulse as usize,
-        execution_credit::Progress {
+        crate::pump::execution_credit::Progress {
             consumed: 101,
             retired: 0,
         },
@@ -193,7 +193,7 @@ fn schedule_resends_orphan_when_consumed_overtook_pushed() {
     q.credit.accept(100);
     q.credit.observe(
         RetiredBy::Pulse as usize,
-        execution_credit::Progress {
+        crate::pump::execution_credit::Progress {
             consumed: 101,
             retired: 0,
         },
@@ -297,9 +297,7 @@ fn history_records_spans_at_send_time_not_enqueue_time() {
     let key = AxisKey { mcu_id: 1, axis: 0 };
 
     let store = Arc::new(Mutex::new(crate::motion_history::HistoryStore::default()));
-    let history = HistoryRecorder {
-        store: Arc::clone(&store),
-    };
+    let history = Arc::clone(&store);
 
     let sink = RecordingSink::new();
     let (ctl, control_rx) = unbounded::<PumpMsg>();
@@ -520,7 +518,8 @@ fn junction_jumps_math() {
     assert!((host_us3 - 500.0).abs() < 1e-3, "host_jump_us={host_us3}");
 }
 
-struct NullSink;
+#[derive(Clone, Copy, Default)]
+pub(super) struct NullSink;
 
 impl SpanSink for NullSink {
     fn send_frame(
@@ -911,25 +910,18 @@ fn queue_pump<S: SpanSink>(
     let mut q = AxisQueue::new(1);
     q.spans.push_back(make_span(0));
     queues.insert(key, q);
-    Pump {
-        queues,
-        junctions: JunctionTracker::default(),
-        cohort: None,
-        halted: BTreeMap::new(),
+    let mut pump = Pump::new(
         sink,
-        callbacks: PumpCallbacks {
+        PumpCallbacks {
             on_drip_stall: Box::new(on_drip_stall),
             ..PumpCallbacks::noop(1)
         },
-        history: None,
-        ledger: Arc::new(crate::drain::DrainLedger::new()),
-        pending_barrier_acks: Vec::new(),
-        release_plan: crate::pump::ReleasePlan::default(),
-        data_open: true,
-        fatal_reason: None,
-        consumption_stall: super::stall::ConsumptionStallWatch::new(consumption_stall_fatal),
-        mem_probe: super::memstat::MemPressureProbe::new(),
-    }
+        None,
+        Arc::new(crate::drain::DrainLedger::new()),
+    );
+    pump.queues = queues;
+    pump.consumption_stall = super::stall::ConsumptionStallWatch::new(consumption_stall_fatal);
+    pump
 }
 
 fn stalled_queue_pump(
@@ -1352,13 +1344,9 @@ struct BuzzFixture {
 fn buzz_fixture() -> BuzzFixture {
     let clock_queries: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
     let queries_for_clock = Arc::clone(&clock_queries);
-    let pump = Pump {
-        queues: BTreeMap::new(),
-        junctions: JunctionTracker::default(),
-        cohort: None,
-        halted: BTreeMap::new(),
-        sink: NullSink,
-        callbacks: PumpCallbacks {
+    let pump = Pump::new(
+        NullSink,
+        PumpCallbacks {
             mcu_clock_of: Box::new(move |mcu_id| {
                 let mut queries = queries_for_clock.lock_ok();
                 queries.push(mcu_id);
@@ -1368,15 +1356,9 @@ fn buzz_fixture() -> BuzzFixture {
             }),
             ..PumpCallbacks::noop(super::stepcompress_sink::SHIM_RING_DEPTH)
         },
-        history: None,
-        ledger: Arc::new(crate::drain::DrainLedger::new()),
-        pending_barrier_acks: Vec::new(),
-        release_plan: crate::pump::ReleasePlan::default(),
-        data_open: true,
-        fatal_reason: None,
-        consumption_stall: super::stall::ConsumptionStallWatch::new(Duration::from_secs(60)),
-        mem_probe: super::memstat::MemPressureProbe::new(),
-    };
+        None,
+        Arc::new(crate::drain::DrainLedger::new()),
+    );
     let (control, control_rx) = crossbeam_channel::unbounded();
     BuzzFixture {
         pump,

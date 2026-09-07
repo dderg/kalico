@@ -4,7 +4,7 @@ import os
 import pathlib
 import sys
 
-from . import engine_wait, structured_log
+from . import engine_mcu, engine_wait, structured_log
 
 
 def _load_native():
@@ -107,18 +107,6 @@ class _StubEngine:
     def pump_backlog(self):
         return 0
 
-    def queued_motion_secs(self):
-        return 0.0
-
-    def dispatched_lead_secs(self):
-        return 0.0
-
-    def pending_channel_moves(self):
-        return 0
-
-    def input_channel_capacity(self):
-        return 8192
-
     def __getattr__(self, name):
         if name in _STUB_NOOP_METHODS:
 
@@ -162,10 +150,7 @@ class MotionEngineWrapper:
         self._calls.shutdown(wait=False, cancel_futures=True)
 
     def _wait_native_call(self, call):
-        future = self._calls.submit(call)
-        while not future.done():
-            self._reactor.pause(self._reactor.monotonic() + 0.001)
-        return future.result()
+        return engine_mcu.wait_call(self._reactor, self._calls, call)
 
     def __getattr__(self, name):
         if name.startswith("_"):
@@ -269,15 +254,6 @@ class MotionEngineWrapper:
         return self._wait_native_call(
             lambda: self._engine.set_position(x, y, z)
         )
-
-    def dispatched_lead_secs(self):
-        return self._engine.dispatched_lead_secs() or 0.0
-
-    def pending_channel_moves(self):
-        return self._engine.pending_channel_moves() or 0
-
-    def pump_backlog(self):
-        return self._engine.pump_backlog() or 0
 
     def motion_state_at(self, mcu, clock=None, print_time=None, axis=None):
         """Per-axis (pos, vel, accel) at a clock, in GCODE space: the bridge

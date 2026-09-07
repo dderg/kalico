@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use host_rt::passthrough_queue::PassthroughRouter;
+use host_rt::passthrough_queue::{McuHandle, PassthroughRouter};
 use nurbs::ScalarNurbs;
 use trajectory::{ClockedMotorSpan, ContinuousAxis, MotorGroup, MotorSpan, MotorTerm};
 
@@ -30,8 +30,8 @@ fn clock_between_mcus_round_trips_through_host_secs() {
     let router = stub_router_two_mcus();
     let got = crate::motion_history::clock_between_mcus(
         &router,
-        crate::types::mcu_handle_from_raw(1),
-        crate::types::mcu_handle_from_raw(2),
+        McuHandle::from_raw(1),
+        McuHandle::from_raw(2),
         1_000_000,
     )
     .unwrap();
@@ -801,7 +801,7 @@ fn rebase_after_probe_trip_round_trips_through_cartesian_inversion() {
 #[test]
 fn host_clock_round_trip_is_identity() {
     let router = stub_router_two_mcus();
-    let h = crate::types::mcu_handle_from_raw(1);
+    let h = McuHandle::from_raw(1);
     let clock = 12_345_678_u64;
     let host = router.clock_to_host_secs(h, clock).expect("synced mcu");
     let back = router

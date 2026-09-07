@@ -240,16 +240,12 @@ pub(crate) fn endpoint_args(launch: EndpointLaunch<'_>, drives: &[EthercatDrive]
         args.push("--events-dir".into());
         args.push(dir.to_string_lossy().into_owned());
     }
-    if drives.len() == 1 {
-        push_drive_flags(&mut args, &drives[0]);
-    } else {
-        for d in drives {
-            args.push("--slave".into());
-            args.push(d.chain_index.to_string());
-            args.push("--axis".into());
-            args.push(d.axis.to_string());
-            push_drive_flags(&mut args, d);
-        }
+    for d in drives {
+        args.push("--slave".into());
+        args.push(d.chain_index.to_string());
+        args.push("--axis".into());
+        args.push(d.axis.to_string());
+        push_drive_flags(&mut args, d);
     }
     args
 }

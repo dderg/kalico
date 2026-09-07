@@ -1,19 +1,7 @@
 pub mod geometry
 pub mod geometry::curve
-pub struct geometry::curve::BezierHandles
-pub geometry::curve::BezierHandles::i: f64
-pub geometry::curve::BezierHandles::j: f64
-pub geometry::curve::BezierHandles::p: f64
-pub geometry::curve::BezierHandles::q: f64
-pub fn geometry::curve::g51_control_points([f64; 3], f64, f64, f64, f64, f64) -> [[f64; 3]; 4]
-pub fn geometry::curve::g5_control_points([f64; 3], geometry::curve::BezierHandles, [f64; 3]) -> [[f64; 3]; 4]
 pub fn geometry::curve::to_collinear_bezier([f64; 3], [f64; 3]) -> [[f64; 3]; 4]
 pub mod geometry::error
-pub enum geometry::error::Fatal
-pub geometry::error::Fatal::Internal(alloc::boxed::Box<geometry::error::InternalDetails>)
-pub geometry::error::Fatal::UnsupportedGcode
-pub geometry::error::Fatal::UnsupportedGcode::gcode_kind: &'static str
-pub geometry::error::Fatal::UnsupportedGcode::line_no: u32
 pub enum geometry::error::GeometryError
 pub geometry::error::GeometryError::DegenerateArc
 pub geometry::error::GeometryError::DegenerateArc::reason: &'static str
@@ -27,51 +15,7 @@ pub geometry::error::GeometryError::NonPlanarBasis
 pub geometry::error::GeometryError::NonPlanarBasis::reason: &'static str
 pub geometry::error::GeometryError::NotSinglePieceCubic
 pub geometry::error::GeometryError::NotSinglePieceCubic::reason: &'static str
-pub geometry::error::GeometryError::UnsupportedGcode
-pub geometry::error::GeometryError::UnsupportedGcode::gcode_kind: &'static str
 pub geometry::error::GeometryError::ZeroMotion
-pub enum geometry::error::InternalKind
-pub geometry::error::InternalKind::BasisMatrixSingular
-pub geometry::error::InternalKind::CubicSegmentInvariantViolation
-pub geometry::error::InternalKind::CubicSegmentInvariantViolation::reason: &'static str
-pub geometry::error::InternalKind::DegreeOutOfBounds
-pub geometry::error::InternalKind::KnotInsertionFailed
-pub geometry::error::InternalKind::NaNDetected
-pub geometry::error::InternalKind::NaNDetected::stage: &'static str
-pub geometry::error::InternalKind::NonMonotoneKnotVector
-#[non_exhaustive] pub enum geometry::error::Recovery
-pub geometry::error::Recovery::DegenerateSlotFallback
-pub geometry::error::Recovery::DegenerateSlotFallback::line_no: u32
-pub geometry::error::Recovery::DegenerateSlotFallback::reason: geometry::error::SlotDegeneracy
-pub geometry::error::Recovery::G5MissingTangent
-pub geometry::error::Recovery::G5MissingTangent::line_no: u32
-pub geometry::error::Recovery::G5PlaneMismatch
-pub geometry::error::Recovery::G5PlaneMismatch::active_plane_g_code: u32
-pub geometry::error::Recovery::G5PlaneMismatch::line_no: u32
-pub geometry::error::Recovery::LspiaNotConverged
-pub geometry::error::Recovery::LspiaNotConverged::last_update_mm: f64
-pub geometry::error::Recovery::LspiaNotConverged::source: geometry::segment::SourceRange
-pub geometry::error::Recovery::MalformedParams
-pub geometry::error::Recovery::MalformedParams::line_no: u32
-pub geometry::error::Recovery::MalformedParams::raw: alloc::string::String
-pub geometry::error::Recovery::ToleranceExceeded
-pub geometry::error::Recovery::ToleranceExceeded::actual_mm: f64
-pub geometry::error::Recovery::ToleranceExceeded::budget_mm: f64
-pub geometry::error::Recovery::ToleranceExceeded::source: geometry::segment::SourceRange
-pub geometry::error::Recovery::UnrecognizedCommand
-pub geometry::error::Recovery::UnrecognizedCommand::head: alloc::string::String
-pub geometry::error::Recovery::UnrecognizedCommand::line_no: u32
-pub geometry::error::Recovery::WindowCapHit
-pub geometry::error::Recovery::WindowCapHit::run_vertex_count: u32
-pub geometry::error::Recovery::WindowCapHit::source: geometry::segment::SourceRange
-#[non_exhaustive] pub enum geometry::error::SlotDegeneracy
-pub geometry::error::SlotDegeneracy::BacktrackingCorner
-pub geometry::error::SlotDegeneracy::ColinearTangents
-pub geometry::error::SlotDegeneracy::ZeroIncidentLength
-pub struct geometry::error::InternalDetails
-pub geometry::error::InternalDetails::backtrace: std::backtrace::Backtrace
-pub geometry::error::InternalDetails::context: alloc::string::String
-pub geometry::error::InternalDetails::kind: geometry::error::InternalKind
 pub mod geometry::fitter
 pub enum geometry::fitter::FitError
 pub geometry::fitter::FitError::Internal
@@ -230,10 +174,6 @@ pub fn geometry::path::line::Line::kappa_endpoints(&self) -> (f64, f64)
 pub fn geometry::path::line::Line::kappa_peak(&self) -> (f64, f64)
 pub fn geometry::path::line::Line::s_len(&self) -> f64
 pub mod geometry::path::lowering
-pub struct geometry::path::lowering::LoweredSample
-pub geometry::path::lowering::LoweredSample::followers: alloc::vec::Vec<f64>
-pub geometry::path::lowering::LoweredSample::position: core::option::Option<[f64; 3]>
-pub geometry::path::lowering::LoweredSample::t_s: f64
 pub trait geometry::path::lowering::PositionProfile
 pub fn geometry::path::lowering::PositionProfile::d2heading_ds2(&self, f64) -> [f64; 3]
 pub fn geometry::path::lowering::PositionProfile::dheading_ds(&self, f64) -> [f64; 3]
@@ -534,6 +474,8 @@ pub geometry::surface::WarpSample::wy: f64
 pub geometry::surface::WarpSample::wyy: f64
 pub geometry::surface::WarpSample::wyz: f64
 pub geometry::surface::WarpSample::wz: f64
+pub mod geometry::vec3
+pub fn geometry::vec3::dist([f64; 3], [f64; 3]) -> f64
 pub mod geometry::velocity
 pub mod geometry::velocity::law
 pub enum geometry::velocity::law::ScalarLaw
@@ -655,11 +597,6 @@ pub geometry::velocity::VelocityReport::traversal_time_s: f64
 pub fn geometry::velocity::plan_velocity_stops(&[geometry::frontend::Move], &[bool], geometry::velocity::VelocityPlanParams) -> core::result::Result<geometry::velocity::VelocityProfile, geometry::velocity::VelocityError>
 pub fn geometry::velocity::plan_velocity_stops_reconstruct_prefix(&[geometry::frontend::Move], &[bool], geometry::velocity::VelocityPlanParams, usize) -> core::result::Result<geometry::velocity::VelocityProfile, geometry::velocity::VelocityError>
 pub fn geometry::velocity::plan_velocity_stops_select_prefix<F>(&[geometry::frontend::Move], &[bool], geometry::velocity::VelocityPlanParams, F) -> core::result::Result<geometry::velocity::VelocityProfile, geometry::velocity::VelocityError> where F: core::ops::function::FnOnce(usize) -> usize
-pub enum geometry::Fatal
-pub geometry::Fatal::Internal(alloc::boxed::Box<geometry::error::InternalDetails>)
-pub geometry::Fatal::UnsupportedGcode
-pub geometry::Fatal::UnsupportedGcode::gcode_kind: &'static str
-pub geometry::Fatal::UnsupportedGcode::line_no: u32
 pub enum geometry::FitError
 pub geometry::FitError::Internal
 pub geometry::FitError::Internal::line_no: u32
@@ -693,43 +630,7 @@ pub geometry::GeometryError::NonPlanarBasis
 pub geometry::GeometryError::NonPlanarBasis::reason: &'static str
 pub geometry::GeometryError::NotSinglePieceCubic
 pub geometry::GeometryError::NotSinglePieceCubic::reason: &'static str
-pub geometry::GeometryError::UnsupportedGcode
-pub geometry::GeometryError::UnsupportedGcode::gcode_kind: &'static str
 pub geometry::GeometryError::ZeroMotion
-pub enum geometry::InternalKind
-pub geometry::InternalKind::BasisMatrixSingular
-pub geometry::InternalKind::CubicSegmentInvariantViolation
-pub geometry::InternalKind::CubicSegmentInvariantViolation::reason: &'static str
-pub geometry::InternalKind::DegreeOutOfBounds
-pub geometry::InternalKind::KnotInsertionFailed
-pub geometry::InternalKind::NaNDetected
-pub geometry::InternalKind::NaNDetected::stage: &'static str
-pub geometry::InternalKind::NonMonotoneKnotVector
-#[non_exhaustive] pub enum geometry::Recovery
-pub geometry::Recovery::DegenerateSlotFallback
-pub geometry::Recovery::DegenerateSlotFallback::line_no: u32
-pub geometry::Recovery::DegenerateSlotFallback::reason: geometry::error::SlotDegeneracy
-pub geometry::Recovery::G5MissingTangent
-pub geometry::Recovery::G5MissingTangent::line_no: u32
-pub geometry::Recovery::G5PlaneMismatch
-pub geometry::Recovery::G5PlaneMismatch::active_plane_g_code: u32
-pub geometry::Recovery::G5PlaneMismatch::line_no: u32
-pub geometry::Recovery::LspiaNotConverged
-pub geometry::Recovery::LspiaNotConverged::last_update_mm: f64
-pub geometry::Recovery::LspiaNotConverged::source: geometry::segment::SourceRange
-pub geometry::Recovery::MalformedParams
-pub geometry::Recovery::MalformedParams::line_no: u32
-pub geometry::Recovery::MalformedParams::raw: alloc::string::String
-pub geometry::Recovery::ToleranceExceeded
-pub geometry::Recovery::ToleranceExceeded::actual_mm: f64
-pub geometry::Recovery::ToleranceExceeded::budget_mm: f64
-pub geometry::Recovery::ToleranceExceeded::source: geometry::segment::SourceRange
-pub geometry::Recovery::UnrecognizedCommand
-pub geometry::Recovery::UnrecognizedCommand::head: alloc::string::String
-pub geometry::Recovery::UnrecognizedCommand::line_no: u32
-pub geometry::Recovery::WindowCapHit
-pub geometry::Recovery::WindowCapHit::run_vertex_count: u32
-pub geometry::Recovery::WindowCapHit::source: geometry::segment::SourceRange
 pub enum geometry::ScalarLaw
 pub geometry::ScalarLaw::ConstAccel
 pub geometry::ScalarLaw::ConstAccel::a0: f64
@@ -738,10 +639,6 @@ pub geometry::ScalarLaw::DiskRail::accel: f64
 pub geometry::ScalarLaw::DiskRail::brake: bool
 pub geometry::ScalarLaw::DiskRail::kappa0: f64
 pub geometry::ScalarLaw::DiskRail::sigma: f64
-#[non_exhaustive] pub enum geometry::SlotDegeneracy
-pub geometry::SlotDegeneracy::BacktrackingCorner
-pub geometry::SlotDegeneracy::ColinearTangents
-pub geometry::SlotDegeneracy::ZeroIncidentLength
 pub enum geometry::SurfaceContinuity
 pub geometry::SurfaceContinuity::C0
 pub geometry::SurfaceContinuity::C1
@@ -855,10 +752,6 @@ pub fn geometry::space::GcodePos::to_machine(self, core::option::Option<&geometr
 pub fn geometry::space::GcodePos::x(&self) -> f64
 pub fn geometry::space::GcodePos::y(&self) -> f64
 pub fn geometry::space::GcodePos::z(&self) -> f64
-pub struct geometry::InternalDetails
-pub geometry::InternalDetails::backtrace: std::backtrace::Backtrace
-pub geometry::InternalDetails::context: alloc::string::String
-pub geometry::InternalDetails::kind: geometry::error::InternalKind
 pub struct geometry::LawSegment
 pub geometry::LawSegment::dt: f64
 pub geometry::LawSegment::law: geometry::velocity::law::ScalarLaw
@@ -985,7 +878,6 @@ pub geometry::VelocityReport::traversal_time_s: f64
 pub const geometry::CORNER_DEVIATION_SCV_FACTOR: f64
 pub fn geometry::corner_deviation_from_scv(f64, f64) -> f64
 pub fn geometry::line_move([f64; 3], [f64; 3], f64, geometry::frontend::MoveContext) -> core::result::Result<geometry::frontend::Move, geometry::frontend::FrontendError>
-pub fn geometry::plan_velocity_stops(&[geometry::frontend::Move], &[bool], geometry::velocity::VelocityPlanParams) -> core::result::Result<geometry::velocity::VelocityProfile, geometry::velocity::VelocityError>
 pub fn geometry::plan_velocity_stops_reconstruct_prefix(&[geometry::frontend::Move], &[bool], geometry::velocity::VelocityPlanParams, usize) -> core::result::Result<geometry::velocity::VelocityProfile, geometry::velocity::VelocityError>
 pub fn geometry::plan_velocity_stops_select_prefix<F>(&[geometry::frontend::Move], &[bool], geometry::velocity::VelocityPlanParams, F) -> core::result::Result<geometry::velocity::VelocityProfile, geometry::velocity::VelocityError> where F: core::ops::function::FnOnce(usize) -> usize
 pub fn geometry::scv_from_corner_deviation(f64, f64) -> f64

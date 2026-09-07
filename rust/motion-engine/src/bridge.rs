@@ -9,14 +9,13 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use host_rt::clock::RealClock;
+use host_rt::host_io::McuHostIo;
 use host_rt::host_io::parser::{ArgValue, DataDictionary, MsgProtoParser};
-use host_rt::host_io::{McuHostIo, McuHostIoConfig};
 use host_rt::mcu_serial_conn::McuSerialConn;
-use host_rt::passthrough_queue::PassthroughRouter;
+use host_rt::passthrough_queue::{McuHandle, PassthroughRouter};
 
 use motion_core::classify;
 use motion_core::mcu_config::{McuAxisConfig, McuTopologyInput, build_mcu_configs};
-use motion_core::types::mcu_handle_from_raw;
 use motion_core::worker::{StreamWorkerError, StreamWorkerHandle};
 use planner_config::PlannerConfig;
 
@@ -114,7 +113,7 @@ fn open_serial_with_retry(
     serial_path: &str,
     effective_baud: u32,
     is_pipe: bool,
-    config: &McuHostIoConfig,
+    label: &str,
     deadline: Instant,
     timeout_s: f64,
 ) -> PyResult<McuHostIo> {
@@ -122,14 +121,14 @@ fn open_serial_with_retry(
         if is_pipe {
             #[cfg(target_family = "unix")]
             {
-                McuHostIo::open_pipe_with_config(serial_path, config.clone())
+                McuHostIo::open_pipe_with_label(serial_path, label)
             }
             #[cfg(not(target_family = "unix"))]
             {
-                McuHostIo::open_with_config(serial_path, effective_baud, config.clone())
+                McuHostIo::open_with_label(serial_path, effective_baud, label)
             }
         } else {
-            McuHostIo::open_with_config(serial_path, effective_baud, config.clone())
+            McuHostIo::open_with_label(serial_path, effective_baud, label)
         }
     })
 }
@@ -137,13 +136,13 @@ fn open_serial_with_retry(
 fn open_canbus_with_retry(
     interface: &str,
     uuid: u64,
-    config: &McuHostIoConfig,
+    label: &str,
     deadline: Instant,
     timeout_s: f64,
 ) -> PyResult<McuHostIo> {
     let link_desc = format!("{interface} uuid={uuid:012x}");
     open_link_with_retry("attach_canbus", &link_desc, deadline, timeout_s, || {
-        McuHostIo::open_canbus_with_config(interface, uuid, config.clone())
+        McuHostIo::open_canbus_with_label(interface, uuid, label)
     })
 }
 
@@ -444,7 +443,7 @@ impl PyMotionEngine {
         drop(conn);
 
         let mut router = self.router.lock_ok();
-        router.release_mcu(mcu_handle_from_raw(handle));
+        router.release_mcu(McuHandle::from_raw(handle));
         Ok(())
     }
 
@@ -560,11 +559,6 @@ impl PyMotionEngine {
             },
         )?;
 
-        let config = McuHostIoConfig {
-            mcu_label: Some(mcu_label.clone()),
-            ..McuHostIoConfig::default()
-        };
-
         let is_pipe = baud == 0
             || serial_path.starts_with("/tmp/")
             || serial_path.starts_with("/dev/pts/")
@@ -575,7 +569,7 @@ impl PyMotionEngine {
             serial_path,
             effective_baud,
             is_pipe,
-            &config,
+            &mcu_label,
             deadline,
             timeout_s,
         )?;
@@ -632,12 +626,8 @@ impl PyMotionEngine {
             },
         )?;
 
-        let config = McuHostIoConfig {
-            mcu_label: Some(mcu_label.clone()),
-            ..McuHostIoConfig::default()
-        };
-
-        let host_io = open_canbus_with_retry(interface, uuid_value, &config, deadline, timeout_s)?;
+        let host_io =
+            open_canbus_with_retry(interface, uuid_value, &mcu_label, deadline, timeout_s)?;
 
         self.register_freshly_attached_mcu(
             mcu_handle,
@@ -747,10 +737,7 @@ impl PyMotionEngine {
             .insert(raw, ETHERCAT_CLOCK_FREQ_HZ);
         self.router
             .lock_ok()
-            .set_nominal_freq(
-                motion_core::types::mcu_handle_from_raw(raw),
-                f64::from(ETHERCAT_CLOCK_FREQ_HZ),
-            )
+            .set_nominal_freq(McuHandle::from_raw(raw), f64::from(ETHERCAT_CLOCK_FREQ_HZ))
             .expect("ethercat mcu handle was claimed on this router");
     }
 }

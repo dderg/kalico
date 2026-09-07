@@ -6,7 +6,6 @@ use std::f64::consts::PI;
 
 use realfft::RealFftPlanner;
 
-pub const MIN_FREQ: f64 = 5.0;
 pub const MAX_FREQ: f64 = 1000.0;
 pub const WINDOW_T_SEC: f64 = 0.5;
 pub const MAX_SHAPER_FREQ: f64 = 1000.0;

@@ -63,10 +63,6 @@ impl KinematicsModule {
         self.kind
     }
 
-    pub fn tag(&self) -> u8 {
-        self.kind as u8
-    }
-
     pub fn lane_weights(&self, lane: usize) -> [f64; SPATIAL_AXES] {
         self.axis_to_motor[lane]
     }

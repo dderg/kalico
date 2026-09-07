@@ -1,4 +1,5 @@
 import pytest
+from fakes import FakeCommandError, FakeKin, FakeNode, FakePrinter
 
 from klippy.extras import servo_axis
 from klippy.extras.resonance_buzz import MOTOR_A, MOTOR_B
@@ -7,33 +8,7 @@ from klippy.motion import Motion
 WAVE = (5000, 133000, 100000, 20000, 1000)
 
 
-class FakeCommandError(Exception):
-    pass
-
-
-class FakeNode:
-    def __init__(self, handle, slot_by_motor):
-        self._handle = handle
-        self._slot_by_motor = slot_by_motor
-
-    def get_engine_handle(self):
-        return self._handle
-
-    def get_slot_for_motor(self, motor_name):
-        return self._slot_by_motor.get(motor_name)
-
-
-class FakePrinter:
-    command_error = FakeCommandError
-
-    def __init__(self, nodes):
-        self._nodes = nodes
-
-    def lookup_object(self, name, default=None):
-        return self._nodes.get(name, default)
-
-
-class FakeEngine:
+class FakeBuzzEngine:
     def __init__(self):
         self.calls = []
 
@@ -60,14 +35,6 @@ class FakeServoMotor:
         return self._chain_index
 
 
-class FakeKin:
-    def __init__(self, rails):
-        self.rails = rails
-
-    def lanes(self):
-        return [(idx, rail.axis, None) for idx, rail in enumerate(self.rails)]
-
-
 def make_servo_rail(axis, motors):
     rail = servo_axis.ServoRail.__new__(servo_axis.ServoRail)
     rail.axis = axis
@@ -78,13 +45,18 @@ def make_servo_rail(axis, motors):
 def make_motion(rails, node_handles, slot_by_motor):
     motion = Motion.__new__(Motion)
     motion.printer = FakePrinter(
-        {
-            "ethercat_node " + name: FakeNode(handle, slot_by_motor)
+        objects={
+            "ethercat_node " + name: FakeNode(
+                handle=handle, slots=slot_by_motor
+            )
             for name, handle in node_handles.items()
         }
     )
-    motion.kin = FakeKin(rails)
-    motion.engine = FakeEngine()
+    motion.kin = FakeKin(
+        rails=rails,
+        lanes=[(idx, rail.axis, None) for idx, rail in enumerate(rails)],
+    )
+    motion.engine = FakeBuzzEngine()
     return motion
 
 

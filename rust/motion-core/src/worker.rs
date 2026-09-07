@@ -12,7 +12,6 @@ use motion_pipeline::{Pipeline, StreamConfig, TrajectoryItem};
 mod dispatch;
 mod ingress;
 mod pump_sink;
-mod stage_cpu;
 
 pub use dispatch::DispatchError;
 use dispatch::{Dispatcher, WorkerLinks};
@@ -148,7 +147,7 @@ impl std::error::Error for StreamWorkerError {}
 pub struct ExecutionResources {
     pub sink: crate::pump::WireSink,
     pub callbacks: crate::pump::PumpCallbacks,
-    pub history: crate::pump::HistoryRecorder,
+    pub history: Arc<Mutex<crate::motion_history::HistoryStore>>,
     pub drain: Arc<crate::drain::DrainLedger>,
     pub router: Arc<Mutex<host_rt::passthrough_queue::PassthroughRouter>>,
     pub anchor: Arc<Mutex<crate::anchor::Anchor>>,
@@ -181,7 +180,6 @@ pub fn setup_pipeline(
     let (output, trajectory_rx) = bounded::<TrajectoryItem>(TRAJECTORY_CHANNEL_CAP);
     let frontier: Arc<CommittedFrontier> = Arc::default();
     let links = Arc::new(WorkerLinks::default());
-    stage_cpu::spawn_sampler(Arc::downgrade(&frontier));
     let mut dispatcher = Dispatcher::new(Arc::clone(&links), Arc::clone(&frontier));
     let admission = Arc::clone(&links);
     let mut projection = Projection {

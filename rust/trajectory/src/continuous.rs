@@ -602,19 +602,19 @@ impl ContinuousAxis {
             Self::Analytic { span, axis } => span.eval_axis(*axis, t)?.position,
             Self::Spline(curve) => {
                 let t = spline_evaluation_time(curve, t)?;
-                nurbs::eval::eval(&curve.as_view(), t)
+                nurbs::eval::eval(curve, t)
             }
             Self::RelativeSpline {
                 base_position,
                 curve,
             } => {
                 let t = spline_evaluation_time(curve, t)?;
-                base_position + nurbs::eval::eval(&curve.as_view(), t)
+                base_position + nurbs::eval::eval(curve, t)
             }
             Self::PiecewiseRelativeSpline(pieces) => {
                 let piece = owning_piece(pieces, t)?;
                 let t = spline_evaluation_time(&piece.curve, t)?;
-                piece.base_position + nurbs::eval::eval(&piece.curve.as_view(), t)
+                piece.base_position + nurbs::eval::eval(&piece.curve, t)
             }
             Self::Hold {
                 position,
@@ -930,7 +930,7 @@ impl MotorGroup {
                 summed_scale,
             } => {
                 let t = spline_evaluation_time(curve, t).map_err(|error| (error, 0))?;
-                Ok(summed_scale * nurbs::eval::eval(&curve.as_view(), t))
+                Ok(summed_scale * nurbs::eval::eval(curve, t))
             }
             Self::RelativeSpline {
                 curve,
@@ -938,7 +938,7 @@ impl MotorGroup {
                 summed_scale,
             } => {
                 let t = spline_evaluation_time(curve, t).map_err(|error| (error, 0))?;
-                Ok(summed_scale * (base_position + nurbs::eval::eval(&curve.as_view(), t)))
+                Ok(summed_scale * (base_position + nurbs::eval::eval(curve, t)))
             }
             Self::Independent(term) => term
                 .axis

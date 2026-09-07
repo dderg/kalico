@@ -284,7 +284,7 @@ impl RuntimeContext {
             // multi-KB `EngineImpl` on the 8 KB MCU stack.
             let isr_ptr = core::ptr::addr_of_mut!((*rt_ptr).isr);
             let inner_ptr: *mut IsrState = UnsafeCell::raw_get(isr_ptr);
-            EngineImpl::init_in_place_production(
+            EngineImpl::init_in_place(
                 core::ptr::addr_of_mut!((*inner_ptr).engine),
                 freq,
                 sample_rate_hz,
@@ -355,9 +355,6 @@ pub fn bind_phase_motor(
     );
     Ok(())
 }
-
-#[cfg(test)]
-mod size_task18;
 
 #[cfg(test)]
 mod tests;

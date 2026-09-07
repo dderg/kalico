@@ -10,15 +10,10 @@ use crate::sensorless::{ERR_ARM_SENSORLESS_AMBIGUOUS_PAIR, ERR_ARM_SENSORLESS_BA
 use crate::strain_comp::ERR_COMP_BAD_LANE;
 use crate::torque::{CommandAction, TorqueState, ERR_ENABLE_FAILED, ERR_PIECES_WHILE_FAULTED};
 use crate::wire::{
-    arm_sensorless_endstop_response_frame, identify_response_frame, motor_state_empty_frame,
-    motor_state_response_frame_multi, push_sample_runs_response_frame,
-    resonance_buzz_response_frame, restore_drive_limits_response_frame,
-    resume_stream_response_frame, runtime_caps_response_frame, sample_grid_response_frame,
-    sdo_read_response_frame, sdo_write_response_frame, seed_servo_home_response_frame,
-    set_diff_damper_response_frame, set_diff_trim_response_frame, set_drive_limits_response_frame,
-    set_dynamics_model_response_frame, set_ff_lead_response_frame, set_strain_comp_response_frame,
-    set_torque_response_frame, start_capture_response_frame, stepper_suppress_response_frame,
-    stop_capture_response_frame, stop_response_frame, Command,
+    identify_response_frame, motor_state_response_frame_multi, push_sample_runs_response_frame,
+    result_frame, runtime_caps_response_frame, sample_grid_response_frame, sdo_read_response_frame,
+    sdo_write_response_frame, stepper_suppress_response_frame, stop_capture_response_frame,
+    stop_response_frame, Command,
 };
 use ethercat_setpoint::dynamics::{
     DynamicsModel, FrameParts, ModeParts, PinParts, ERR_DYNAMICS_BAD_DIM, ERR_DYNAMICS_REJECTED,
@@ -28,10 +23,10 @@ use ethercat_setpoint::setpoint::{
     EXECUTOR_SETPOINT_RING, MAX_FILL_CYCLES, RING_DEPTH_CYCLES,
 };
 use mcu_protocol::messages::{
-    ArmSensorlessEndstop, LaneRun, PushSampleRuns, ResonanceBuzz, SdoRead, SdoReadResponse,
-    SdoWrite, SdoWriteResponse, SetDiffDamper, SetDiffTrim, SetDriveLimits, SetDynamicsModel,
-    SetFfLead, SetTorque, StartCapture, StopCaptureResponse, LANE_RUN_FLAG_REANCHOR,
-    LANE_RUN_FLAG_TAIL,
+    ArmSensorlessEndstop, LaneRun, MessageKind, PushSampleRuns, ResonanceBuzz, SdoRead,
+    SdoReadResponse, SdoWrite, SdoWriteResponse, SetDiffDamper, SetDiffTrim, SetDriveLimits,
+    SetDynamicsModel, SetFfLead, SetTorque, StartCapture, StopCaptureResponse,
+    LANE_RUN_FLAG_REANCHOR, LANE_RUN_FLAG_TAIL,
 };
 
 /// Command execution shares the RT thread with the DC exchange, so it must
@@ -151,15 +146,21 @@ pub(super) fn dispatch_commands(ctx: &mut EndpointCtx) -> ControlFlow<()> {
                         *s = false;
                     }
                     crate::rt_eprintln!("ec-rt: ResumeStream — stream reopened");
-                    ctx.server
-                        .respond(&resume_stream_response_frame(correlation_id, 0));
+                    ctx.server.respond(&result_frame(
+                        MessageKind::ResumeStreamResponse,
+                        correlation_id,
+                        0,
+                    ));
                 }
                 Err(code) => {
                     crate::rt_eprintln!(
                         "ec-rt: ResumeStream rejected code={code} — stream was not halted"
                     );
-                    ctx.server
-                        .respond(&resume_stream_response_frame(correlation_id, code));
+                    ctx.server.respond(&result_frame(
+                        MessageKind::ResumeStreamResponse,
+                        correlation_id,
+                        code,
+                    ));
                 }
             },
             Command::StepperSuppress {
@@ -438,13 +439,17 @@ pub(super) fn handle_set_torque(ctx: &mut EndpointCtx, correlation_id: u32, msg:
             ctx.gate.enable_finished(enable_rc == 0);
             if enable_rc == 0 {
                 crate::rt_eprintln!("ec-rt: torque enabled (CiA402 operation enabled)");
-                ctx.server
-                    .respond(&set_torque_response_frame(correlation_id, 0));
+                ctx.server.respond(&result_frame(
+                    MessageKind::SetTorqueResponse,
+                    correlation_id,
+                    0,
+                ));
             } else {
                 crate::rt_eprintln!(
                     "ec-rt: CiA402 enable failed rc={enable_rc} — disabling and exiting"
                 );
-                ctx.server.respond(&set_torque_response_frame(
+                ctx.server.respond(&result_frame(
+                    MessageKind::SetTorqueResponse,
                     correlation_id,
                     ERR_ENABLE_FAILED,
                 ));
@@ -457,8 +462,11 @@ pub(super) fn handle_set_torque(ctx: &mut EndpointCtx, correlation_id: u32, msg:
                 msg.execute_at_ns,
                 monotonic_ns()
             );
-            ctx.server
-                .respond(&set_torque_response_frame(correlation_id, 0));
+            ctx.server.respond(&result_frame(
+                MessageKind::SetTorqueResponse,
+                correlation_id,
+                0,
+            ));
         }
         CommandAction::Reject { code } => {
             crate::rt_eprintln!(
@@ -468,8 +476,11 @@ pub(super) fn handle_set_torque(ctx: &mut EndpointCtx, correlation_id: u32, msg:
                 msg.execute_at_ns,
                 monotonic_ns()
             );
-            ctx.server
-                .respond(&set_torque_response_frame(correlation_id, code));
+            ctx.server.respond(&result_frame(
+                MessageKind::SetTorqueResponse,
+                correlation_id,
+                code,
+            ));
             ctx.drive.shutdown_and_exit();
         }
     }
@@ -483,7 +494,8 @@ fn handle_start_capture(ctx: &mut EndpointCtx, correlation_id: u32, msg: StartCa
             "ec-rt: StartCapture drive slot out of range \
              (num_slaves={num_slaves}) — rejecting"
         );
-        ctx.server.respond(&start_capture_response_frame(
+        ctx.server.respond(&result_frame(
+            MessageKind::StartCaptureResponse,
             correlation_id,
             ERR_CAPTURE_BAD_DRIVE_LIST,
         ));
@@ -520,8 +532,11 @@ fn handle_set_drive_limits(ctx: &mut EndpointCtx, correlation_id: u32, msg: SetD
             "ec-rt: SetDriveLimits for slots {:?} but only {num_slaves} slave(s)",
             msg.drives.iter().map(|d| d.slot).collect::<Vec<_>>()
         );
-        ctx.server
-            .respond(&set_drive_limits_response_frame(correlation_id, -309));
+        ctx.server.respond(&result_frame(
+            MessageKind::SetDriveLimitsResponse,
+            correlation_id,
+            -309,
+        ));
     } else {
         ctx.mailbox.submit(MailboxRequest::WriteLimits {
             correlation_id,
@@ -550,8 +565,11 @@ pub(super) fn handle_set_ff_lead(ctx: &mut EndpointCtx, correlation_id: u32, msg
             "ec-rt: SetFfLead for slot {} but only {num_slaves} slave(s)",
             msg.slot
         );
-        ctx.server
-            .respond(&set_ff_lead_response_frame(correlation_id, -309));
+        ctx.server.respond(&result_frame(
+            MessageKind::SetFfLeadResponse,
+            correlation_id,
+            -309,
+        ));
         return;
     }
     crate::rt_eprintln!(
@@ -566,8 +584,11 @@ pub(super) fn handle_set_ff_lead(ctx: &mut EndpointCtx, correlation_id: u32, msg
         lead_ns = msg.lead_ns,
         "feedforward lead acknowledged for the host filler"
     );
-    ctx.server
-        .respond(&set_ff_lead_response_frame(correlation_id, 0));
+    ctx.server.respond(&result_frame(
+        MessageKind::SetFfLeadResponse,
+        correlation_id,
+        0,
+    ));
 }
 
 fn handle_restore_drive_limits(ctx: &mut EndpointCtx, correlation_id: u32, slot_mask: u32) {
@@ -576,8 +597,11 @@ fn handle_restore_drive_limits(ctx: &mut EndpointCtx, correlation_id: u32, slot_
         crate::rt_eprintln!(
             "ec-rt: RestoreDriveLimits slot_mask={slot_mask:#x} but only {num_slaves} slave(s)"
         );
-        ctx.server
-            .respond(&restore_drive_limits_response_frame(correlation_id, -309));
+        ctx.server.respond(&result_frame(
+            MessageKind::RestoreDriveLimitsResponse,
+            correlation_id,
+            -309,
+        ));
         return;
     }
     let entries = ctx
@@ -681,12 +705,16 @@ pub(super) fn handle_seed_servo_home(
             "ec-rt: SeedServoHome for slot {slot} but only {} slave(s)",
             ctx.counts_per_mm.len()
         );
-        ctx.server
-            .respond(&seed_servo_home_response_frame(correlation_id, -309));
+        ctx.server.respond(&result_frame(
+            MessageKind::SeedServoHomeResponse,
+            correlation_id,
+            -309,
+        ));
     } else if !super::all_lanes_idle(ctx) {
         if ctx.pending_seed.is_some() {
             crate::rt_eprintln!("ec-rt: SeedServoHome rejected — a seed is already pending");
-            ctx.server.respond(&seed_servo_home_response_frame(
+            ctx.server.respond(&result_frame(
+                MessageKind::SeedServoHomeResponse,
                 correlation_id,
                 ERR_SEED_HOME_STREAMING,
             ));
@@ -716,8 +744,11 @@ fn complete_seed(ctx: &mut EndpointCtx, correlation_id: u32, slot: u8, home_q16:
         "ec-rt: SeedServoHome slot={slot} report anchor \
          {anchor_counts} counts = {anchor_mm:.4} mm (drive frame untouched)"
     );
-    ctx.server
-        .respond(&seed_servo_home_response_frame(correlation_id, 0));
+    ctx.server.respond(&result_frame(
+        MessageKind::SeedServoHomeResponse,
+        correlation_id,
+        0,
+    ));
 }
 
 pub(super) fn drain_pending_seed(ctx: &mut EndpointCtx) {
@@ -734,7 +765,8 @@ pub(super) fn drain_pending_seed(ctx: &mut EndpointCtx) {
              empty after the drain timeout",
             seed.slot
         );
-        ctx.server.respond(&seed_servo_home_response_frame(
+        ctx.server.respond(&result_frame(
+            MessageKind::SeedServoHomeResponse,
             seed.correlation_id,
             ERR_SEED_HOME_STREAMING,
         ));
@@ -808,7 +840,8 @@ fn handle_arm_sensorless_endstop(
         );
         0
     };
-    ctx.server.respond(&arm_sensorless_endstop_response_frame(
+    ctx.server.respond(&result_frame(
+        MessageKind::ArmSensorlessEndstopResponse,
         correlation_id,
         result,
     ));
@@ -819,7 +852,8 @@ fn handle_resonance_buzz(ctx: &mut EndpointCtx, correlation_id: u32, _msg: Reson
         "ec-rt: ResonanceBuzz rejected — the endpoint takes the buzz as \
          host-generated sample runs, not an endpoint oscillator"
     );
-    ctx.server.respond(&resonance_buzz_response_frame(
+    ctx.server.respond(&result_frame(
+        MessageKind::ResonanceBuzzResponse,
         correlation_id,
         ERR_BUZZ_IN_RING_MODE,
     ));
@@ -828,7 +862,7 @@ fn handle_resonance_buzz(ctx: &mut EndpointCtx, correlation_id: u32, _msg: Reson
 fn handle_set_diff_damper(ctx: &mut EndpointCtx, correlation_id: u32, msg: SetDiffDamper) {
     let rc = ctx.damper.set(
         ctx.num_slaves,
-        crate::pair::SlotPair {
+        crate::damper::SlotPair {
             a: msg.slot_a,
             b: msg.slot_b,
         },
@@ -861,14 +895,17 @@ fn handle_set_diff_damper(ctx: &mut EndpointCtx, correlation_id: u32, msg: SetDi
         rc,
         "differential damper reconfigured"
     );
-    ctx.server
-        .respond(&set_diff_damper_response_frame(correlation_id, rc));
+    ctx.server.respond(&result_frame(
+        MessageKind::SetDiffDamperResponse,
+        correlation_id,
+        rc,
+    ));
 }
 
 fn handle_set_diff_trim(ctx: &mut EndpointCtx, correlation_id: u32, msg: SetDiffTrim) {
     let rc = ctx.trim.set(
         ctx.num_slaves,
-        crate::pair::SlotPair {
+        crate::damper::SlotPair {
             a: msg.slot_a,
             b: msg.slot_b,
         },
@@ -901,8 +938,11 @@ fn handle_set_diff_trim(ctx: &mut EndpointCtx, correlation_id: u32, msg: SetDiff
         rc,
         "differential trim reconfigured"
     );
-    ctx.server
-        .respond(&set_diff_trim_response_frame(correlation_id, rc));
+    ctx.server.respond(&result_frame(
+        MessageKind::SetDiffTrimResponse,
+        correlation_id,
+        rc,
+    ));
 }
 
 fn handle_set_strain_comp(
@@ -954,8 +994,11 @@ fn handle_set_strain_comp(
         rc,
         "strain compensation map reconfigured"
     );
-    ctx.server
-        .respond(&set_strain_comp_response_frame(correlation_id, rc));
+    ctx.server.respond(&result_frame(
+        MessageKind::SetStrainCompResponse,
+        correlation_id,
+        rc,
+    ));
 }
 
 pub(super) fn handle_set_dynamics_model(
@@ -1040,8 +1083,11 @@ pub(super) fn handle_set_dynamics_model(
         rc,
         "dynamics feedforward model reconfigured"
     );
-    ctx.server
-        .respond(&set_dynamics_model_response_frame(correlation_id, rc));
+    ctx.server.respond(&result_frame(
+        MessageKind::SetDynamicsModelResponse,
+        correlation_id,
+        rc,
+    ));
 }
 
 fn handle_sdo_read(ctx: &mut EndpointCtx, correlation_id: u32, msg: SdoRead) {
@@ -1099,13 +1145,13 @@ fn handle_query_motor_state(ctx: &mut EndpointCtx, correlation_id: u32) {
                 (ctx.drive.position_actual(s), ctx.drive.velocity_actual(s));
             let delta_counts = i64::from(pos_counts) - i64::from(anchor_counts);
             let pos_mm = anchor_mm + delta_counts as f64 / ctx.cmd_counts_per_mm[s];
-            let vel_mm_s =
-                ethercat_setpoint::scale::velocity_mm_s(vel_counts_s, ctx.cmd_counts_per_mm[s]);
+            let vel_mm_s = f64::from(vel_counts_s) / ctx.cmd_counts_per_mm[s];
             Some((s as u8, pos_mm, vel_mm_s))
         })
         .collect();
     if samples.is_empty() {
-        ctx.server.respond(&motor_state_empty_frame(correlation_id));
+        ctx.server
+            .respond(&motor_state_response_frame_multi(correlation_id, &[]));
     } else {
         ctx.server
             .respond(&motor_state_response_frame_multi(correlation_id, &samples));
@@ -1122,8 +1168,11 @@ pub(super) fn drain_pending_starts(ctx: &mut EndpointCtx) {
                     ctx.capture.clear_failed_start();
                 }
                 crate::rt_eprintln!("ec-rt: StartCapture path={path} rc={rc}");
-                ctx.server
-                    .respond(&start_capture_response_frame(correlation_id, rc));
+                ctx.server.respond(&result_frame(
+                    MessageKind::StartCaptureResponse,
+                    correlation_id,
+                    rc,
+                ));
             }
             None => start_idx += 1,
         }
@@ -1209,9 +1258,9 @@ pub(super) fn drain_mailbox_replies(ctx: &mut EndpointCtx) {
                     crate::rt_eprintln!("ec-rt: {what} applied {entries:?}");
                 }
                 let frame = if restore {
-                    restore_drive_limits_response_frame(correlation_id, rc)
+                    result_frame(MessageKind::RestoreDriveLimitsResponse, correlation_id, rc)
                 } else {
-                    set_drive_limits_response_frame(correlation_id, rc)
+                    result_frame(MessageKind::SetDriveLimitsResponse, correlation_id, rc)
                 };
                 ctx.server.respond(&frame);
             }

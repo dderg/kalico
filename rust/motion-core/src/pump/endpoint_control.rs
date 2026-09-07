@@ -49,8 +49,6 @@ pub enum EndpointCommand {
     },
 }
 
-pub struct EndpointReply;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndpointBuzzSpec {
     Ethercat {
@@ -141,10 +139,7 @@ impl WireSink {
         }
     }
 
-    pub(super) fn handle_endpoint_command(
-        &self,
-        command: EndpointCommand,
-    ) -> Result<EndpointReply, String> {
+    pub(super) fn handle_endpoint_command(&self, command: EndpointCommand) -> Result<(), String> {
         match command {
             EndpointCommand::FreezeMotor {
                 mcu_id,
@@ -286,7 +281,7 @@ impl WireSink {
                 require_filler_ok(filler.install_dynamics(host_model), "set_dynamics_model")?;
             }
         }
-        Ok(EndpointReply)
+        Ok(())
     }
 
     fn resolve_buzz_routes(&self, specs: &[EndpointBuzzSpec]) -> Result<Vec<BuzzRoute>, String> {

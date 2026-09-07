@@ -9,7 +9,7 @@ use trajectory::{
 #[derive(Debug)]
 pub struct AxisQueue {
     pub spans: VecDeque<ClockedMotorSpan>,
-    pub credit: execution_credit::ExecutionCredit<{ RetiredBy::COUNT }>,
+    pub credit: crate::pump::execution_credit::ExecutionCredit<{ RetiredBy::COUNT }>,
     pub ring_depth: u32,
     pub lead_secs: f64,
     /// Staged views that carry motion (`!is_hold_span`), maintained
@@ -57,7 +57,7 @@ impl AxisQueue {
     pub fn new(ring_depth: u32) -> Self {
         Self {
             spans: VecDeque::new(),
-            credit: execution_credit::ExecutionCredit::new(),
+            credit: crate::pump::execution_credit::ExecutionCredit::new(),
             ring_depth,
             lead_secs: MAX_LEAD_SECS,
             staged_motion: 0,

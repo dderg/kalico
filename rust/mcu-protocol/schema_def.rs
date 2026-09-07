@@ -56,28 +56,6 @@ struct SchemaMessage {
 // Message order: ascending type-tag.
 const SCHEMA_MESSAGES: &[SchemaMessage] = &[
     SchemaMessage {
-        type_tag: 0x0030,
-        name: "ConfigureAxes",
-        version: 1,
-        channel: "control",
-        fields: &[
-            SchemaField { name: "kinematics", ty: "u8" },
-            SchemaField { name: "present_mask", ty: "u8" },
-            SchemaField { name: "awd_mask", ty: "u8" },
-            SchemaField { name: "invert_mask", ty: "u8" },
-            SchemaField { name: "steps_per_mm", ty: "f32[4]" },
-        ],
-    },
-    SchemaMessage {
-        type_tag: 0x0031,
-        name: "ConfigureAxesResponse",
-        version: 1,
-        channel: "control",
-        fields: &[
-            SchemaField { name: "result", ty: "i32" },
-        ],
-    },
-    SchemaMessage {
         type_tag: 0x0040,
         name: "QueryRuntimeCaps",
         version: 1,

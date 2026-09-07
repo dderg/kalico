@@ -1,9 +1,9 @@
 use super::{
     Arc, Duration, ETHERCAT_CLOCK_FREQ_HZ, HashMap, HashSet, HomingRun, HomingState, Instant,
-    McuAxisConfig, McuConnection, McuHostIo, McuSerialConn, McuTopologyInput, Mutex,
+    McuAxisConfig, McuConnection, McuHandle, McuHostIo, McuSerialConn, McuTopologyInput, Mutex,
     PyMotionEngine, PyResult, PyRuntimeError, PyValueError, STREAM_INTEGRATION_TOL,
     STREAM_MAX_BUFFER_MOVES, abort_after_tracing_appender_drains, arm_endpoint_death_watchdog,
-    build_mcu_configs, collect_motor_positions_inner, dispatch_endstop_trip, mcu_handle_from_raw,
+    build_mcu_configs, collect_motor_positions_inner, dispatch_endstop_trip,
     query_ethercat_runtime_caps, report_endpoint_death,
 };
 use motion_core::lock_ext::LockExt;
@@ -160,9 +160,9 @@ impl PyMotionEngine {
 
     pub(super) fn seed_ethercat_clock_estimates(&self, ethercat_mcu_ids: &HashSet<u32>) {
         let mut router = self.router.lock_ok();
-        let now_ns = ethercat_rt::clock::monotonic_ns();
+        let now_ns = host_rt::clock::monotonic_raw_ns();
         for &mcu_id in ethercat_mcu_ids {
-            let mcu_h = mcu_handle_from_raw(mcu_id);
+            let mcu_h = McuHandle::from_raw(mcu_id);
             let _ = router.set_clock_est_from_sample(
                 mcu_h,
                 f64::from(ETHERCAT_CLOCK_FREQ_HZ),
@@ -190,7 +190,7 @@ impl PyMotionEngine {
         let router_for_clock = Arc::clone(&self.router);
         let clock_of: motion_core::pump::ClockSource = Arc::new(move |mcu_id: u32| {
             let r = router_for_clock.lock_ok();
-            r.ack_clock_and_freq(mcu_handle_from_raw(mcu_id))
+            r.ack_clock_and_freq(McuHandle::from_raw(mcu_id))
         });
 
         let transports = Arc::clone(&self.axis_transports.lock_ok());
@@ -375,7 +375,7 @@ impl PyMotionEngine {
                 }),
                 mcu_clock_of: Box::new(move |mcu_id: u32| {
                     let r = router_for_pump.lock_ok();
-                    r.ack_clock_and_freq(mcu_handle_from_raw(mcu_id))
+                    r.ack_clock_and_freq(McuHandle::from_raw(mcu_id))
                 }),
                 on_fatal_transport: Box::new(
                     move |key: motion_core::types::AxisKey, reason: &str| {
@@ -385,9 +385,7 @@ impl PyMotionEngine {
                 on_abandon: Box::new(log_abandoned_spans),
                 on_drip_stall: Box::new(abort_on_drip_stall),
             },
-            history: motion_core::pump::HistoryRecorder {
-                store: Arc::clone(&self.motion_history),
-            },
+            history: Arc::clone(&self.motion_history),
             drain: drain_for_pump,
             router: Arc::clone(&self.router),
             anchor: Arc::clone(&self.dispatch_anchor),

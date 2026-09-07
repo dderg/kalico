@@ -8,6 +8,7 @@
 #include "board/irq.h"
 #include "sched.h"
 #include "autoconf.h"
+#include "generic/runtime_tick.h" // runtime_widened_host_clock
 #include "stepper.h"
 
 #if CONFIG_MOTION_RUNTIME
@@ -19,7 +20,6 @@ extern void *runtime_handle;
 int32_t runtime_sample_halt(struct Runtime *rt, uint64_t halt_clock);
 #endif
 
-extern uint64_t runtime_widened_host_clock(void);
 
 extern int kalico_console_write_raw(const uint8_t *buf, uint16_t len);
 

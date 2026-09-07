@@ -3,8 +3,8 @@ use super::{
     collect_motor_positions_inner, planner_err, pymethods,
 };
 use host_rt::clock::{HostSecs, PrintTime};
+use host_rt::passthrough_queue::McuHandle;
 use motion_core::lock_ext::LockExt;
-use motion_core::types::mcu_handle_from_raw;
 use motion_core::worker::StreamWorkerError;
 
 struct PhaseRegisterCall<'a> {
@@ -183,7 +183,7 @@ impl PyMotionEngine {
     fn print_time_now(&self, mcu_handle: u32) -> Option<f64> {
         self.router
             .lock_ok()
-            .print_time_now(mcu_handle_from_raw(mcu_handle))
+            .print_time_now(McuHandle::from_raw(mcu_handle))
             .map(PrintTime::get)
     }
     fn get_last_move_time(&self) -> f64 {
@@ -270,7 +270,7 @@ impl PyMotionEngine {
         t0: Option<f64>,
         what: &str,
     ) -> PyResult<f64> {
-        let mcu = mcu_handle_from_raw(mcu_handle);
+        let mcu = McuHandle::from_raw(mcu_handle);
         let router = self.router.lock_ok();
         let now = router.print_time_now(mcu).ok_or_else(|| {
             PyRuntimeError::new_err(format!(

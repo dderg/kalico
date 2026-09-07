@@ -6,7 +6,7 @@ use geometry::fitter::{
 use geometry::path::{Line, PathSegment, Segment};
 use geometry::{CornerFitConfig, Move};
 
-use crate::{CONTIGUITY_EPS_MM, Control, StreamInput, dist3};
+use crate::{CONTIGUITY_EPS_MM, Control, StreamInput};
 
 const ALIGN_EPS_MM: f64 = 1e-9;
 const MIN_RUN_FACETS: usize = 3;
@@ -709,7 +709,7 @@ impl TravelAligningSender<'_> {
             return true;
         }
         if let Some(prev_end) = self.alignment.last_spatial_end {
-            let gap = dist3(prev_end, start);
+            let gap = geometry::vec3::dist(prev_end, start);
             assert!(
                 gap <= CONTIGUITY_EPS_MM,
                 "fit_stage emitted discontinuous geometry at line {}: previous piece ends at \
@@ -778,7 +778,9 @@ fn align_travel(m: Move, prev_end: Option<[f64; 3]>, next_start: Option<[f64; 3]
     };
     let a = prev_end.unwrap_or(line.start);
     let b = next_start.unwrap_or(line.end);
-    if dist3(a, line.start) <= ALIGN_EPS_MM && dist3(b, line.end) <= ALIGN_EPS_MM {
+    if geometry::vec3::dist(a, line.start) <= ALIGN_EPS_MM
+        && geometry::vec3::dist(b, line.end) <= ALIGN_EPS_MM
+    {
         return m;
     }
     let line_no = m.source.start_line;

@@ -40,7 +40,7 @@ fn slots_for_axis_returns_every_awd_slot_in_order() {
 }
 
 #[test]
-fn endpoint_args_single_drive_uses_legacy_form() {
+fn endpoint_args_single_drive_still_emits_a_slave_group() {
     let args = endpoint_args(
         EndpointLaunch {
             interface: "eth0",
@@ -59,8 +59,8 @@ fn endpoint_args_single_drive_uses_legacy_form() {
             ..drive()
         }],
     );
-    assert!(!args.iter().any(|a| a == "--slave"));
-    assert!(!args.iter().any(|a| a == "--axis"));
+    assert_eq!(args.iter().filter(|a| *a == "--slave").count(), 1);
+    assert_eq!(args.iter().filter(|a| *a == "--axis").count(), 1);
     let cycle: Vec<&String> = args
         .iter()
         .enumerate()
@@ -223,6 +223,10 @@ fn endpoint_args_emits_the_full_argv_for_a_single_drive() {
             "250",
             "--group-delay-us",
             "250",
+            "--slave",
+            "0",
+            "--axis",
+            "0",
             "--counts-per-mm",
             "1000",
             "--rotation-distance",

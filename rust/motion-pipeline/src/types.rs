@@ -7,14 +7,6 @@ use trajectory::{AxisChainSet, ContinuousSegment, NudgeProfile};
 
 pub const CONTIGUITY_EPS_MM: f64 = 1e-6;
 
-#[must_use]
-pub fn dist3(a: [f64; 3], b: [f64; 3]) -> f64 {
-    let dx = a[0] - b[0];
-    let dy = a[1] - b[1];
-    let dz = a[2] - b[2];
-    (dx * dx + dy * dy + dz * dz).sqrt()
-}
-
 pub fn advance_odometer(pos: &mut [f64], movement: &Move) {
     let length = movement.segment.s_len();
     if let Some(segment) = &movement.segment.spatial {

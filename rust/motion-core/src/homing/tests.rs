@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use trajectory::ClockedMotorSpan;
 
-use host_rt::passthrough_queue::PassthroughRouter;
+use host_rt::passthrough_queue::{McuHandle, PassthroughRouter};
 
 use crate::homing::{
     STALE_TRIP_HARD_LIMIT_S, reconstruct_axis_position, trajectory_final_position,
@@ -74,7 +74,7 @@ fn shared(store: HistoryStore) -> Arc<Mutex<HistoryStore>> {
 fn host_of(router: &Arc<Mutex<PassthroughRouter>>, mcu_id: u32, clock: u64) -> f64 {
     router
         .lock_ok()
-        .clock_to_host_secs(crate::types::mcu_handle_from_raw(mcu_id), clock)
+        .clock_to_host_secs(McuHandle::from_raw(mcu_id), clock)
         .expect("test router must resolve clock_to_host_secs")
 }
 
@@ -885,8 +885,8 @@ mod corexy_reconstruction_tests {
 
 mod stepcompress_reconcile_tests {
     use crate::homing::{
-        StepcompressLane, StepcompressReconciliation, reconcile_stepcompress_axis,
-        reconcile_stepcompress_lanes, stepcompress_lane,
+        StepcompressLane, StepcompressReconciliation, reconcile_stepcompress_lanes,
+        stepcompress_lane,
     };
     use crate::kinematics::KinematicsKind;
     use crate::mcu_config::{
@@ -949,81 +949,6 @@ mod stepcompress_reconcile_tests {
             mcu_id: MCU_ID,
             axis: axis as u8,
         }
-    }
-
-    #[test]
-    fn agreeing_readback_returns_mcu_position_and_reseeds_shim() {
-        let history_position = 40.0;
-        let reseeds: RefCell<Vec<(usize, i64)>> = RefCell::new(Vec::new());
-        let pos = reconcile_stepcompress_axis(
-            &cfg(),
-            key(AXIS_X),
-            history_position,
-            &|lane| {
-                assert_eq!(lane.oid, 11);
-                assert_eq!(lane.motor, 0);
-                Ok(3200)
-            },
-            &|lane, count| {
-                reseeds.borrow_mut().push((lane.motor, count));
-                Ok(())
-            },
-        )
-        .expect("agreeing readback must reconcile");
-        assert_eq!(pos, history_position);
-        assert_eq!(reseeds.into_inner(), vec![(0, 3200)]);
-    }
-
-    #[test]
-    fn mcu_readback_replaces_a_substep_clock_reconstruction() {
-        let history_position = 3200.0 * MICROSTEP + MICROSTEP * 0.9;
-        let pos = reconcile_stepcompress_axis(
-            &cfg(),
-            key(AXIS_X),
-            history_position,
-            &|_| Ok(3200),
-            &|_, _| Ok(()),
-        )
-        .expect("the executed step count must be authoritative");
-        assert_eq!(pos, 3200.0 * MICROSTEP);
-    }
-
-    #[test]
-    fn inverted_lane_negates_the_readback() {
-        let lane_steps = 800_i64;
-        let history_position = -(lane_steps as f64) * MICROSTEP;
-        let pos = reconcile_stepcompress_axis(
-            &cfg(),
-            key(AXIS_Y),
-            history_position,
-            &|lane| {
-                assert!(lane.invert_dir);
-                assert_eq!(lane.oid, 12);
-                Ok(lane_steps)
-            },
-            &|_, _| Ok(()),
-        )
-        .expect("inverted lane must reconcile against the negated count");
-        assert_eq!(pos, history_position);
-    }
-
-    #[test]
-    fn mcu_readback_replaces_a_multi_step_clock_reconstruction() {
-        let reseeded = RefCell::new(false);
-        let executed_steps = 3203;
-        let pos = reconcile_stepcompress_axis(
-            &cfg(),
-            key(AXIS_X),
-            40.0,
-            &|_| Ok(executed_steps),
-            &|_, _| {
-                *reseeded.borrow_mut() = true;
-                Ok(())
-            },
-        )
-        .expect("the executed step count must be authoritative");
-        assert!((pos - 40.0375).abs() < 1e-12);
-        assert!(reseeded.into_inner());
     }
 
     #[test]
@@ -1177,16 +1102,6 @@ mod stepcompress_reconcile_tests {
             reseeded.into_inner(),
             vec![(11, -100), (13, -150), (12, 0), (14, 0)]
         );
-    }
-
-    #[test]
-    fn missing_oid_for_a_stepcompress_lane_is_a_loud_error() {
-        let mut broken = cfg();
-        broken.hw.stepper_oids = vec![11];
-        let err =
-            reconcile_stepcompress_axis(&broken, key(AXIS_Y), 0.0, &|_| Ok(0), &|_, _| Ok(()))
-                .unwrap_err();
-        assert!(err.contains("has no stepper oid"), "got: {err}");
     }
 
     #[test]

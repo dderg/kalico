@@ -425,10 +425,9 @@ impl LaneCursor {
 /// `base_position`, returning the bytes written.
 ///
 /// Chosen over fixed two-byte i16 differences with a 4-byte escape by
-/// measurement, not assumption: on the shaped bench print
-/// (`cargo run --release -p motion-core --example sample_encoding_bench`) a
-/// 2 kHz phase lane costs 2601 B/s with varints against 4584 B/s with i16, and
-/// a 4 kHz lane 5112 B/s against 9167 B/s — 43 % and 44 % less wire. Varints
+/// measurement, not assumption: on the shaped bench print a 2 kHz phase lane
+/// costs 2601 B/s with varints against 4584 B/s with i16, and a 4 kHz lane
+/// 5112 B/s against 9167 B/s — 43 % and 44 % less wire. Varints
 /// also pack 24..48 samples into a run where i16 manages 9..24, so each run
 /// amortises its header over twice the motion.
 pub fn encode_deltas(

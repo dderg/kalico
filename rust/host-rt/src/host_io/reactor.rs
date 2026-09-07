@@ -80,7 +80,8 @@ pub struct ReactorSetup {
     pub submission_rx: Receiver<ReactorCommand>,
     pub status_snapshot: Arc<ArcSwap<StatusEvent>>,
     pub seq: IdentifySeqState,
-    pub config: crate::host_io::McuHostIoConfig,
+    pub mcu_label: Arc<str>,
+    pub link_health: Arc<crate::host_io::link_health::LinkHealth>,
     pub fire_and_forget_depth: Arc<FireAndForgetDepth>,
 }
 
@@ -91,16 +92,11 @@ impl Reactor {
             submission_rx,
             status_snapshot,
             seq,
-            config,
+            mcu_label,
+            link_health,
             fire_and_forget_depth,
         } = setup;
-        let link_health = Arc::clone(&config.link_health);
-        let mcu_label: Arc<str> = config.mcu_label.as_deref().unwrap_or("unknown").into();
-        let event_dispatcher = EventDispatcher::new(
-            Arc::clone(&status_snapshot),
-            config.trace_capacity,
-            config.host_event_capacity,
-        );
+        let event_dispatcher = EventDispatcher::new(Arc::clone(&status_snapshot));
         Self {
             io,
             parser,
@@ -142,7 +138,6 @@ impl Reactor {
         parser: Arc<MsgProtoParser>,
         submission_rx: Receiver<ReactorCommand>,
         status_snapshot: Arc<ArcSwap<StatusEvent>>,
-        config: crate::host_io::McuHostIoConfig,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self::new_with_clock(
@@ -155,7 +150,8 @@ impl Reactor {
                     next_send_seq_abs: 1,
                     mcu_receive_seq_abs: 1,
                 },
-                config,
+                mcu_label: "test".into(),
+                link_health: Arc::new(crate::host_io::link_health::LinkHealth::default()),
                 fire_and_forget_depth: Arc::new(FireAndForgetDepth::default()),
             },
             clock,
@@ -275,8 +271,6 @@ impl Reactor {
         if let Some(fault) = self.pending_host_fault.take() {
             self.event_dispatcher.fault_latch.dispatch(fault);
         }
-
-        self.event_dispatcher.host_event_dispatcher.drain_pending();
 
         let now = self.clock.now();
         let evicted = self.awaiting_response.evict_expired(now);

@@ -8,7 +8,7 @@ use crossbeam_channel::Receiver;
 
 use motion_pipeline::{
     BarrierAck, CONTIGUITY_EPS_MM, Control, DispatchCommand, StreamConfig, StreamError,
-    StreamInput, advance_odometer, dist3,
+    StreamInput, advance_odometer,
 };
 
 use super::dispatch::WorkerLinks;
@@ -171,7 +171,7 @@ impl Ingress {
             use geometry::path::lowering::PositionProfile;
             let got = seg.point_at(0.0);
             let expected = [self.odometer[0], self.odometer[1], self.odometer[2]];
-            let gap_mm = dist3(expected, got);
+            let gap_mm = geometry::vec3::dist(expected, got);
             if gap_mm > CONTIGUITY_EPS_MM {
                 fatal(
                     &StreamError::Discontinuity {

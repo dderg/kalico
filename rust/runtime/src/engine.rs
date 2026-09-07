@@ -93,13 +93,6 @@ impl Engine {
                 .write([const { crate::sample_exec::SampleLane::new() }; MAX_AXES]);
         }
     }
-
-    /// # Safety
-    /// See [`init_in_place`].
-    #[allow(unsafe_code)]
-    pub unsafe fn init_in_place_production(ptr: *mut Self, clock_freq: u32, sample_rate_hz: u32) {
-        unsafe { Self::init_in_place(ptr, clock_freq, sample_rate_hz) }
-    }
 }
 
 impl Engine {

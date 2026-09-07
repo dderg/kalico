@@ -79,7 +79,6 @@ pub motion_pipeline::types::StreamConfig::max_extrude_only_accel_mm_s2: f64
 pub motion_pipeline::types::StreamConfig::max_extrude_only_velocity_mm_s: f64
 pub const motion_pipeline::types::CONTIGUITY_EPS_MM: f64
 pub fn motion_pipeline::types::advance_odometer(&mut [f64], &geometry::frontend::Move)
-pub fn motion_pipeline::types::dist3([f64; 3], [f64; 3]) -> f64
 pub enum motion_pipeline::BaseItem
 pub motion_pipeline::BaseItem::Control(motion_pipeline::types::Control)
 pub motion_pipeline::BaseItem::Drain
@@ -150,4 +149,3 @@ pub motion_pipeline::StreamConfig::max_extrude_only_accel_mm_s2: f64
 pub motion_pipeline::StreamConfig::max_extrude_only_velocity_mm_s: f64
 pub const motion_pipeline::CONTIGUITY_EPS_MM: f64
 pub fn motion_pipeline::advance_odometer(&mut [f64], &geometry::frontend::Move)
-pub fn motion_pipeline::dist3([f64; 3], [f64; 3]) -> f64

@@ -17,29 +17,6 @@ pub struct LaneProjection {
     pub epoch_freq: Option<f64>,
 }
 
-/// Records each dispatched view into the motion-history store when its
-/// transport endpoint takes ownership, so the store mirrors work that can
-/// reach the MCU. Recording at dispatch time instead would flood the ring
-/// with an entire move up front — a long homing move evicts its own start
-/// before the endstop trip is resolved against it.
-///
-/// A [`ClockedMotorSpan`] already carries the exact clock anchor and the rate
-/// the producer projected it on, so the store needs nothing else to place the
-/// view on the MCU clock.
-pub struct HistoryRecorder {
-    pub store: Arc<std::sync::Mutex<crate::motion_history::HistoryStore>>,
-}
-
-impl HistoryRecorder {
-    pub(super) fn record(
-        &self,
-        key: AxisKey,
-        span: ClockedMotorSpan,
-    ) -> Result<(), crate::motion_history::HistoryError> {
-        self.store.lock_ok().record(key, span)
-    }
-}
-
 /// Which wire path finished the views a heartbeat reports. A dual-transport
 /// lane is a member of two endpoints at once, and each one only ever retires
 /// the views the pump routed through it, so their counts are separate
@@ -89,7 +66,7 @@ pub enum PumpMsg {
     },
     Endpoint {
         command: super::EndpointCommand,
-        reply: std::sync::mpsc::SyncSender<Result<super::EndpointReply, String>>,
+        reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
     /// One resonance sweep, armed across every transport it names in one
     /// pass. It rides the control channel rather than the span stream
@@ -581,10 +558,7 @@ pub struct CutCredit {
 }
 
 pub trait SpanSink: Send {
-    fn endpoint_control(
-        &self,
-        _command: super::EndpointCommand,
-    ) -> Result<super::EndpointReply, String> {
+    fn endpoint_control(&self, _command: super::EndpointCommand) -> Result<(), String> {
         Err("endpoint control is unsupported by this execution sink".to_string())
     }
 

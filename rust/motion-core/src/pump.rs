@@ -4,11 +4,9 @@ mod barrier_ledger;
 mod diag;
 mod drip;
 mod endpoint_control;
-pub use endpoint_control::{
-    EndpointBuzzSpec, EndpointCommand, EndpointReply, buzz_axis_bits, buzz_lanes,
-};
+pub mod execution_credit;
+pub use endpoint_control::{EndpointBuzzSpec, EndpointCommand, buzz_axis_bits, buzz_lanes};
 mod junction;
-mod memstat;
 mod messages;
 mod pump_loop;
 mod sample_sink;
@@ -25,8 +23,8 @@ pub use junction::{
 };
 pub use messages::{
     BundleLimits, BuzzLane, BuzzParams, BuzzRoute, BuzzStart, BuzzToken, BuzzTransport, BuzzWave,
-    CutCredit, DrainTick, HeartbeatMsg, HistoryRecorder, LaneProjection, PumpCallbacks, PumpMsg,
-    RetiredBy, SendError, SpanSink,
+    CutCredit, DrainTick, HeartbeatMsg, LaneProjection, PumpCallbacks, PumpMsg, RetiredBy,
+    SendError, SpanSink,
 };
 pub use pump_loop::MAX_LEAD_SECS;
 pub(crate) use pump_loop::Pump;
@@ -60,8 +58,6 @@ mod heartbeat_credit_tests;
 mod hold_merge_seam_tests;
 #[cfg(test)]
 mod lane_rejoin_tests;
-#[cfg(test)]
-mod memstat_tests;
 #[cfg(test)]
 mod sched_tests;
 #[cfg(test)]

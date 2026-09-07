@@ -1,8 +1,4 @@
-use runtime_contract::error::{
-    RUNTIME_ERR_INTERNAL_INVARIANT, RUNTIME_ERR_SAMPLE_RATE_MISCONFIGURED,
-    RUNTIME_ERR_SAMPLE_RING_FULL, RUNTIME_ERR_SAMPLE_RING_UNDERRUN, RUNTIME_ERR_SAMPLE_RUN_LATE,
-    RUNTIME_ERR_SAMPLE_RUN_REJECTED,
-};
+use runtime_contract::error::FaultCode;
 use runtime_contract::sample_run::SampleRunError;
 
 use super::*;
@@ -89,7 +85,7 @@ fn hole_between_runs_is_a_fault() {
     );
     assert_eq!(
         r.take_fault().map(|v| (v & 0xFFFF) as i16 as i32),
-        Some(RUNTIME_ERR_SAMPLE_RUN_REJECTED)
+        Some(FaultCode::SampleRunRejected.as_i32())
     );
 }
 
@@ -102,10 +98,13 @@ fn run_for_already_played_cycles_is_late_with_its_deficit() {
         .fill(&header(10, false), &entries(1, 0))
         .expect_err("late run must fault");
     assert_eq!(err, RingFault::RunLate { deficit_us: 500 });
-    assert_eq!(err.code(), RUNTIME_ERR_SAMPLE_RUN_LATE);
+    assert_eq!(err.code(), FaultCode::SampleRunLate.as_i32());
     let reg = r.take_fault().expect("latched");
     assert_eq!(reg >> 16, 500);
-    assert_eq!((reg & 0xFFFF) as i16 as i32, RUNTIME_ERR_SAMPLE_RUN_LATE);
+    assert_eq!(
+        (reg & 0xFFFF) as i16 as i32,
+        FaultCode::SampleRunLate.as_i32()
+    );
 }
 
 #[test]
@@ -128,7 +127,7 @@ fn draining_a_run_that_did_not_declare_its_end_is_an_underrun() {
     let reg = r.take_fault().expect("underrun latched");
     assert_eq!(
         (reg & 0xFFFF) as i16 as i32,
-        RUNTIME_ERR_SAMPLE_RING_UNDERRUN
+        FaultCode::SampleRingUnderrun.as_i32()
     );
     assert_eq!(reg >> 16, 4_000);
 }
@@ -162,7 +161,7 @@ fn a_non_dc_interval_is_rejected_instead_of_resampled() {
             got_ticks: INTERVAL / 2
         }
     );
-    assert_eq!(err.code(), RUNTIME_ERR_SAMPLE_RATE_MISCONFIGURED);
+    assert_eq!(err.code(), FaultCode::SampleRateMisconfigured.as_i32());
 }
 
 #[test]
@@ -228,7 +227,7 @@ fn a_fill_past_the_free_depth_is_a_fault() {
             asked: free as u32 + 1
         }
     );
-    assert_eq!(err.code(), RUNTIME_ERR_SAMPLE_RING_FULL);
+    assert_eq!(err.code(), FaultCode::SampleRingFull.as_i32());
 }
 
 #[test]
@@ -248,7 +247,7 @@ fn a_backwards_grid_index_is_a_broken_invariant() {
     assert_eq!(r.play(9), Played::Drained);
     assert_eq!(
         r.take_fault().map(|v| (v & 0xFFFF) as i16 as i32),
-        Some(RUNTIME_ERR_INTERNAL_INVARIANT)
+        Some(FaultCode::InternalInvariant.as_i32())
     );
 }
 

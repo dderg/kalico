@@ -3,7 +3,7 @@ use std::os::unix::io::FromRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use host_rt::host_io::{McuHostIo, McuHostIoConfig};
+use host_rt::host_io::McuHostIo;
 use host_rt::mcu_serial_conn::McuSerialConn;
 
 use planner_config::PlannerConfig;
@@ -44,7 +44,7 @@ fn host_io_on_pty(slave_path: &str) -> (Arc<McuHostIo>, Weak<McuHostIo>) {
         );
         Box::new(serialport::TTYPort::from_raw_fd(fd))
     };
-    let io = McuHostIo::from_port_skip_identify(port, McuHostIoConfig::default());
+    let io = McuHostIo::from_port_skip_identify(port, "test");
     let arc = Arc::new(io);
     let weak = Arc::downgrade(&arc);
     (arc, weak)
@@ -247,9 +247,7 @@ fn install_test_pipeline(
             timeout: std::time::Duration::from_secs(1),
         },
         callbacks: motion_core::pump::PumpCallbacks::noop(256),
-        history: motion_core::pump::HistoryRecorder {
-            store: Arc::clone(&engine.motion_history),
-        },
+        history: Arc::clone(&engine.motion_history),
         drain: Arc::clone(&engine.drain),
         router: Arc::clone(&engine.router),
         anchor: Arc::clone(&engine.dispatch_anchor),

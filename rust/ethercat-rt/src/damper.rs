@@ -17,7 +17,13 @@
 //! lag (EtherCAT transport plus the drive's torque-command filters and
 //! notches) is compensated by an explicit first-order lead term.
 
-use crate::pair::SlotPair;
+/// The slot pair every differential feature (damper, trim, strain comp) is
+/// configured against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SlotPair {
+    pub a: u8,
+    pub b: u8,
+}
 
 pub const ERR_DAMPER_BAD_SLOT: i32 = -831;
 pub const ERR_DAMPER_BAD_CLAMP: i32 = -832;

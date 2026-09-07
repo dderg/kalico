@@ -28,7 +28,10 @@ def make_motion():
         get_last_move_time=lambda: 0.0,
         submit_bezier=lambda *a: m.engine.calls.append(("bezier", a)),
     )
-    m.mcu = None
+    m.mcu = types.SimpleNamespace(is_fileoutput=lambda: True)
+    m.reactor = types.SimpleNamespace(monotonic=lambda: 0.0)
+    m._last_reactor_yield = 0.0
+    m._engine_wakeup = None
     m._clock_sync_confirmed = False
     m._fire_active_callbacks = lambda axes_d: None
     m._sync_print_time = lambda: None

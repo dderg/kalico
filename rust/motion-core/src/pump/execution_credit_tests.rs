@@ -1,4 +1,4 @@
-use execution_credit::{Cut, ExecutionCredit, Progress};
+use super::{Cut, ExecutionCredit, Progress};
 
 fn progress(consumed: u32, retired: u32) -> Progress {
     Progress { consumed, retired }

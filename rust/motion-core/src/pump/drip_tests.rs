@@ -1,3 +1,4 @@
+use super::tests::NullSink;
 use super::*;
 use crate::lock_ext::LockExt;
 use crossbeam_channel::unbounded;
@@ -39,20 +40,6 @@ fn span_dur(start_clock: u64, secs: f64) -> ClockedMotorSpan {
 
 fn span(start_clock: u64) -> ClockedMotorSpan {
     span_dur(start_clock, 0.001)
-}
-
-struct NullSink;
-
-impl SpanSink for NullSink {
-    fn send_frame(
-        &self,
-        _key: AxisKey,
-        _spans: &[ClockedMotorSpan],
-        _new_head: u32,
-        _room: u32,
-    ) -> Result<i32, SendError> {
-        Ok(mcu_protocol::result_codes::OK)
-    }
 }
 
 #[derive(Clone)]

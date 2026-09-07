@@ -664,13 +664,13 @@ fn halt_before_pulse_progress_releases_capacity_without_claiming_playback() {
         queue
             .credit
             .interrupt(h.endpoint.abort_axes(&[0]).unwrap().into_iter().map(|cut| {
-                execution_credit::Cut {
+                crate::pump::execution_credit::Cut {
                     source: cut.by as usize,
-                    before: execution_credit::Progress {
+                    before: crate::pump::execution_credit::Progress {
                         consumed: cut.before.0,
                         retired: cut.before.1,
                     },
-                    after: execution_credit::Progress {
+                    after: crate::pump::execution_credit::Progress {
                         consumed: cut.after.0,
                         retired: cut.after.1,
                     },
@@ -683,7 +683,7 @@ fn halt_before_pulse_progress_releases_capacity_without_claiming_playback() {
     let credit = h.latest_heartbeat().unwrap();
     queue.credit.observe(
         crate::pump::RetiredBy::Pulse as usize,
-        execution_credit::Progress {
+        crate::pump::execution_credit::Progress {
             consumed: credit.consumed_counts.unwrap()[0],
             retired: credit.retired_counts[0],
         },
@@ -723,7 +723,7 @@ fn halt_before_pulse_progress_releases_capacity_without_claiming_playback() {
     let credit = h.latest_heartbeat().unwrap();
     queue.credit.observe(
         crate::pump::RetiredBy::Pulse as usize,
-        execution_credit::Progress {
+        crate::pump::execution_credit::Progress {
             consumed: credit.consumed_counts.unwrap()[0],
             retired: credit.retired_counts[0],
         },
@@ -741,7 +741,7 @@ fn halt_before_pulse_progress_releases_capacity_without_claiming_playback() {
     let credit = h.latest_heartbeat().unwrap();
     queue.credit.observe(
         crate::pump::RetiredBy::Pulse as usize,
-        execution_credit::Progress {
+        crate::pump::execution_credit::Progress {
             consumed: credit.consumed_counts.unwrap()[0],
             retired: credit.retired_counts[0],
         },
@@ -762,7 +762,7 @@ fn halt_before_pulse_progress_releases_capacity_without_claiming_playback() {
     assert_eq!(sent_steps(), 20);
     queue.credit.observe(
         crate::pump::RetiredBy::Pulse as usize,
-        execution_credit::Progress {
+        crate::pump::execution_credit::Progress {
             consumed: h.endpoint.shim.consumed_counts()[0],
             retired: h.endpoint.published_counts()[0],
         },

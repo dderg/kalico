@@ -384,7 +384,7 @@ fn cold_run_infill_replays_without_overcommit() {
     let mut moves = Vec::new();
     for (i, (x, y)) in pts.into_iter().enumerate() {
         let end = [x, y, 0.0];
-        if dist3(prev, end) < 1e-9 {
+        if geometry::vec3::dist(prev, end) < 1e-9 {
             continue;
         }
         moves.push(line_bench(i as u32 + 1, prev, end));

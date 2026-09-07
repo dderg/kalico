@@ -33,7 +33,7 @@ pub fn barrier_seq_before(candidate: u32, reference: u32) -> bool {
     barrier_seq_after(reference, candidate)
 }
 
-pub fn barrier_seq_covers(high_water: u32, seq: u32) -> bool {
+fn barrier_seq_covers(high_water: u32, seq: u32) -> bool {
     high_water == seq || barrier_seq_after(high_water, seq)
 }
 

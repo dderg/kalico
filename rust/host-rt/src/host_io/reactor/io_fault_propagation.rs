@@ -118,7 +118,6 @@ fn fresh_reactor_with_broken_write() -> (Reactor, std::sync::mpsc::Sender<Reacto
         parser,
         rx,
         status_snapshot,
-        crate::host_io::McuHostIoConfig::default(),
         clock,
     );
     (reactor, tx)
@@ -270,7 +269,7 @@ fn drain_path_transitions_closed_on_io_error() {
     for seq in 0..crate::host_io::window::MAX_PENDING_BLOCKS as u64 {
         reactor
             .unacked_window
-            .push(crate::host_io::window::UnackedEntry {
+            .push_back(crate::host_io::window::UnackedEntry {
                 seq,
                 frame_bytes: vec![],
                 sent_at: Instant::now(),
@@ -295,7 +294,7 @@ fn drain_path_transitions_closed_on_io_error() {
         .pending_outbound_order
         .push_back(PendingOutboundKind::Submission);
 
-    reactor.unacked_window.pop_acked(1);
+    crate::host_io::window::pop_acked(&mut reactor.unacked_window, 1);
     reactor.drain_pending_submissions();
 
     let result = completion_rx.try_recv().expect("completion delivered");
@@ -434,7 +433,6 @@ fn fresh_reactor_with_flaky_port(
         parser,
         rx,
         status_snapshot,
-        crate::host_io::McuHostIoConfig::default(),
         clock,
     );
     (reactor, tx)

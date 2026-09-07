@@ -1,8 +1,6 @@
 use std::time::Instant;
 
-use crate::host_io::mcu_session::{
-    PendingMcuCall, build_kalico_frame, build_kalico_identify_frame,
-};
+use crate::host_io::mcu_session::{PendingMcuCall, build_kalico_identify_frame};
 use crate::host_io::reactor::{Reactor, ReactorState};
 use crate::transport::TransportError;
 
@@ -31,19 +29,14 @@ impl Reactor {
                 self.closed_via_shutdown = true;
             }
             ReactorCommand::MarkExpectedDisconnect => self.handle_mark_expected_disconnect(),
-            ReactorCommand::AttachHeartbeatCallback(wrapper) => {
-                self.event_dispatcher.heartbeat_callback = Some(wrapper.0);
+            ReactorCommand::AttachHeartbeatCallback(cb) => {
+                self.event_dispatcher.heartbeat_callback = Some(cb);
             }
-            ReactorCommand::SetMcuLogHook(wrapper) => {
-                self.event_dispatcher
-                    .set_mcu_log_hook(move |e| (wrapper.0)(e));
+            ReactorCommand::SetMcuLogHook(hook) => {
+                self.event_dispatcher.set_mcu_log_hook(hook);
             }
             ReactorCommand::SubscribeFault { sender, reply } => {
                 let result = self.event_dispatcher.fault_latch.subscribe(sender);
-                let _ = reply.send(result);
-            }
-            ReactorCommand::SubscribeTrace { sender, reply } => {
-                let result = self.event_dispatcher.trace_ring.subscribe(sender);
                 let _ = reply.send(result);
             }
             ReactorCommand::SubscribeRuntimeEvents {
@@ -51,13 +44,6 @@ impl Reactor {
                 bulk,
                 reply,
             } => self.handle_subscribe_runtime_events(priority, bulk, reply),
-            ReactorCommand::SubscribeHostEvents { sender, reply } => {
-                let result = self
-                    .event_dispatcher
-                    .host_event_dispatcher
-                    .subscribe(sender);
-                let _ = reply.send(result);
-            }
             ReactorCommand::FireAndForget { payload } => self.handle_fire_and_forget(payload),
             ReactorCommand::FireAndForgetBatch {
                 payloads,
@@ -245,7 +231,7 @@ impl Reactor {
             return;
         }
         let cid = self.transport_state.allocate_correlation_id();
-        let frame = build_kalico_frame(mcu_transport::CHANNEL_CONTROL, kind, cid, &body);
+        let frame = mcu_transport::wire_helpers::control_frame(kind, cid, &body);
         self.transport_state.pending.insert(
             cid,
             PendingMcuCall {

@@ -744,7 +744,6 @@ fn v8_pin_fields_parse_and_expose_per_mode_state() {
     assert!(m.pin_active(0), "mode 0 has nonzero pin mass");
     assert!(!m.pin_active(1), "mode 1 pin mass is zero");
     assert!(!m.pin_active(9), "out-of-range mode is inactive");
-    assert_eq!(m.pin_lead_ns(), vec![300_000, 300_000]);
 }
 
 #[test]
@@ -758,7 +757,6 @@ fn v8_pin_fields_default_to_disabled_when_absent() {
     assert_eq!(m.pin_mass, [0.0, 0.0]);
     assert_eq!(m.pin_zeta, [0.0, 0.0]);
     assert!(!m.pin_active(0));
-    assert_eq!(m.pin_lead_ns(), vec![0, 0]);
 }
 
 #[test]
@@ -842,14 +840,12 @@ fn block_diagonal_concatenates_pin_fields() {
     assert_eq!(node.pin_zeta, [0.04, 0.0]);
     assert!(node.pin_active(0));
     assert!(!node.pin_active(1));
-    assert_eq!(node.pin_lead_ns(), vec![120_000, 0]);
 }
 
 #[test]
 fn v6_and_v7_fixtures_still_report_no_pin() {
     let v6 = DynamicsModel::from_toml_str(COREXY).unwrap();
     assert!(!v6.pin_active(0));
-    assert_eq!(v6.pin_lead_ns(), vec![0, 0]);
     let v7 = DynamicsModel::from_toml_str(COREXY_V7).unwrap();
     assert!(!v7.pin_active(0));
     assert_eq!(v7.pin_mass, [0.0, 0.0]);

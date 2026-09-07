@@ -902,10 +902,6 @@ impl StepcompressEndpoint {
         self.lane_of_oid(oid).is_some()
     }
 
-    pub fn shim_mut(&mut self) -> &mut StepShim {
-        &mut self.shim
-    }
-
     pub fn reset_position(&mut self, pos_steps: &[i64]) -> Result<(), SendError> {
         if pos_steps.len() != self.lanes.len() {
             return Err(self.fatal(&format!(

@@ -10,7 +10,6 @@ members = [
     "runtime",
     "runtime-contract",
     "host-rt",
-    "execution-credit",
     "planner-config",
     "motion-core",
     "motion-engine",

@@ -1,6 +1,6 @@
 use super::{
-    Arc, DataDictionary, MsgProtoParser, Py, PyDict, PyMotionEngine, PyResult, PyRuntimeError,
-    Python, mcu_handle_from_raw, pymethods, router_err,
+    Arc, DataDictionary, McuHandle, MsgProtoParser, Py, PyDict, PyMotionEngine, PyResult,
+    PyRuntimeError, Python, pymethods, router_err,
 };
 use host_rt::host_io::parser::ArgValue;
 use host_rt::transport::MessageParams;
@@ -178,9 +178,6 @@ impl PyMotionEngine {
                 d.set_item("segment_id", f.segment_id)?;
                 d.set_item("synthesized", f.synthesized)?;
             }
-            RuntimeEvent::Trace(_) => {
-                return Ok(None);
-            }
             RuntimeEvent::Heartbeat { .. } => {
                 return Ok(None);
             }
@@ -256,7 +253,7 @@ impl PyMotionEngine {
         let mut router = self.router.lock_ok();
         router
             .set_clock_est_rebased(
-                mcu_handle_from_raw(mcu),
+                McuHandle::from_raw(mcu),
                 freq,
                 offset,
                 last_clock,
@@ -273,7 +270,7 @@ impl PyMotionEngine {
         self.clock_freqs.lock_ok().remove(&mcu);
         self.router
             .lock_ok()
-            .invalidate_clock_est(mcu_handle_from_raw(mcu))
+            .invalidate_clock_est(McuHandle::from_raw(mcu))
             .map_err(router_err)?;
         Ok(())
     }
@@ -287,7 +284,7 @@ impl PyMotionEngine {
         self.nominal_clock_freqs.lock_ok().insert(mcu, freq_hz);
         self.router
             .lock_ok()
-            .set_nominal_freq(mcu_handle_from_raw(mcu), f64::from(freq_hz))
+            .set_nominal_freq(McuHandle::from_raw(mcu), f64::from(freq_hz))
             .map_err(router_err)?;
         Ok(())
     }

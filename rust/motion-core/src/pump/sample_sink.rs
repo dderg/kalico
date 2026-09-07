@@ -965,6 +965,7 @@ impl SampleEndpoint {
         self.lanes.iter().map(|lane| lane.consumed).collect()
     }
 
+    #[cfg(test)]
     pub fn lane_positions(&self) -> Vec<i64> {
         self.lanes.iter().map(|lane| lane.position).collect()
     }
@@ -976,6 +977,7 @@ impl SampleEndpoint {
         Arc::clone(&self.mcu_retired)
     }
 
+    #[cfg(test)]
     pub fn outstanding_runs(&self) -> Result<Vec<u32>, SendError> {
         self.lanes
             .iter()
@@ -983,6 +985,7 @@ impl SampleEndpoint {
             .collect()
     }
 
+    #[cfg(test)]
     pub fn backlog_len(&self) -> usize {
         self.backlog.len()
     }

@@ -5,11 +5,7 @@
 //! exchange. Runs abut by construction — a hole, an overlap, a late run or a
 //! drained ring under motion is a latched fault, never a pad or a clamp.
 
-use runtime_contract::error::{
-    RUNTIME_ERR_INTERNAL_INVARIANT, RUNTIME_ERR_SAMPLE_RATE_MISCONFIGURED,
-    RUNTIME_ERR_SAMPLE_RING_FULL, RUNTIME_ERR_SAMPLE_RING_UNDERRUN, RUNTIME_ERR_SAMPLE_RUN_LATE,
-    RUNTIME_ERR_SAMPLE_RUN_REJECTED,
-};
+use runtime_contract::error::FaultCode;
 use runtime_contract::sample_run::SampleRunError;
 
 /// The executor code the endpoint reports in `SampleGridResponse.executor`:
@@ -99,16 +95,16 @@ impl RingFault {
     #[must_use]
     pub fn code(self) -> i32 {
         match self {
-            RingFault::RunLate { .. } => RUNTIME_ERR_SAMPLE_RUN_LATE,
-            RingFault::Underrun { .. } => RUNTIME_ERR_SAMPLE_RING_UNDERRUN,
+            RingFault::RunLate { .. } => FaultCode::SampleRunLate.as_i32(),
+            RingFault::Underrun { .. } => FaultCode::SampleRingUnderrun.as_i32(),
             RingFault::RingFull { .. } | RingFault::FillTooLarge { .. } => {
-                RUNTIME_ERR_SAMPLE_RING_FULL
+                FaultCode::SampleRingFull.as_i32()
             }
             RingFault::Rejected(_) | RingFault::OriginShift { .. } => {
-                RUNTIME_ERR_SAMPLE_RUN_REJECTED
+                FaultCode::SampleRunRejected.as_i32()
             }
-            RingFault::IntervalMismatch { .. } => RUNTIME_ERR_SAMPLE_RATE_MISCONFIGURED,
-            RingFault::GridRegression { .. } => RUNTIME_ERR_INTERNAL_INVARIANT,
+            RingFault::IntervalMismatch { .. } => FaultCode::SampleRateMisconfigured.as_i32(),
+            RingFault::GridRegression { .. } => FaultCode::InternalInvariant.as_i32(),
         }
     }
 
@@ -420,9 +416,6 @@ impl SetpointRing {
         fault
     }
 }
-
-/// Endpoint fault code for a grid whose phase drifted off the DC period.
-pub const GRID_PHASE_FAULT_CODE: i32 = RUNTIME_ERR_INTERNAL_INVARIANT;
 
 /// The DC cycle grid: the sample stream's clock. `g_ts` in the C backend
 /// advances by whole cycle periods forever (an overrun re-anchor jumps a

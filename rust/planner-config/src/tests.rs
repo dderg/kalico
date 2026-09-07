@@ -107,13 +107,6 @@ fn registry_orders_spatial_then_followers() {
     .unwrap();
     assert_eq!(reg.axis_index("x").unwrap(), 0);
     assert_eq!(reg.axis_index("e").unwrap(), 3);
-    assert_eq!(
-        reg.follower_words(),
-        vec![geometry::FollowerWord {
-            letter: b'E',
-            axis_index: 3
-        }]
-    );
 }
 
 #[test]

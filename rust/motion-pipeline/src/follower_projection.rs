@@ -409,10 +409,9 @@ pub(crate) fn project_followers(
                 });
             }
             let semantic_cuts = projected_cuts.unwrap_or_else(|| piece_boundaries(&track));
-            let track_start = nurbs::eval::eval(&track.as_view(), t_start);
+            let track_start = nurbs::eval::eval(&track, t_start);
             let output_base = state.projected_output_end.unwrap_or(base_position) - track_start;
-            state.projected_output_end =
-                Some(output_base + nurbs::eval::eval(&track.as_view(), t_end));
+            state.projected_output_end = Some(output_base + nurbs::eval::eval(&track, t_end));
             state.projected_through_t = Some(t_end);
             state.projected.push(ProjSeg {
                 t_start,
@@ -514,7 +513,7 @@ pub(crate) fn project_followers(
                     piece.coeffs.resize(unified_input_degree + 1, 0.0);
                 }
                 let mut kernel_input = bezier_pieces_to_nurbs(&input_pieces);
-                let input_offset = nurbs::eval::eval(&kernel_input.as_view(), target_start);
+                let input_offset = nurbs::eval::eval(&kernel_input, target_start);
                 for piece in &mut input_pieces {
                     piece.coeffs[0] -= input_offset;
                 }
@@ -845,14 +844,14 @@ fn fit_kernel_window<S: TrackSignal>(
 type Pvaj4 = (f64, f64, f64, f64);
 
 fn pvaj_of_track(track: &ScalarNurbs, t: f64) -> Pvaj4 {
-    let mut state = [nurbs::eval::eval(&track.as_view(), t), 0.0, 0.0, 0.0];
+    let mut state = [nurbs::eval::eval(track, t), 0.0, 0.0, 0.0];
     let mut current = track.clone();
     for slot in state.iter_mut().skip(1) {
         if current.degree() == 0 {
             break;
         }
         current = nurbs::eval::derivative(&current);
-        *slot = nurbs::eval::eval(&current.as_view(), t);
+        *slot = nurbs::eval::eval(&current, t);
     }
     (state[0], state[1], state[2], state[3])
 }

@@ -27,7 +27,6 @@ LEGACY_METHODS = [
     "manual_move",
     "dwell",
     "wait_moves",
-    "wait_moves_and_mcu",
     "get_last_move_time",
     "get_position",
     "set_position",
@@ -36,8 +35,6 @@ LEGACY_METHODS = [
     "check_busy",
     "stats",
     "get_kinematics",
-    "get_active_rails_for_axis",
-    "get_max_velocity",
     "get_extruder",
     "set_extruder",
     "register_lookahead_callback",
@@ -64,7 +61,6 @@ def toolhead_fixture():
     toolhead.extruder = extruder_mod.DummyExtruder(printer)
     toolhead._max_velocity = 300.0
     toolhead._max_accel = 3000.0
-    toolhead.min_cruise_ratio = 0.0
     toolhead._corner_deviation = 0.0034517796864424596
     toolhead._planner_ready = False
 

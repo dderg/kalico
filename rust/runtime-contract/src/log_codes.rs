@@ -10,7 +10,6 @@
 
 pub const SUBSYSTEM_RUNTIME: u8 = 0;
 pub const SUBSYSTEM_MOTION: u8 = 1;
-pub const SUBSYSTEM_TICK: u8 = 2;
 pub const SUBSYSTEM_ENDSTOP: u8 = 3;
 pub const SUBSYSTEM_DIAG: u8 = 4;
 
@@ -27,7 +26,6 @@ pub fn subsystem_name(id: u8) -> &'static str {
     match id {
         SUBSYSTEM_RUNTIME => "runtime",
         SUBSYSTEM_MOTION => "motion",
-        SUBSYSTEM_TICK => "tick",
         SUBSYSTEM_ENDSTOP => "endstop",
         SUBSYSTEM_DIAG => "diag",
         _ => "unknown",
@@ -39,7 +37,6 @@ pub fn subsystem_name(id: u8) -> &'static str {
 // Start at 1; 0 is reserved as "no event".
 
 pub const EVENT_RUNTIME_FAULT_LATCHED: u16 = 1;
-pub const EVENT_RUNTIME_ENGINE_RESET: u16 = 2;
 pub const EVENT_RUNTIME_MCU_READY: u16 = 3;
 pub const EVENT_RUNTIME_LOG_DROPS: u16 = 4;
 pub const EVENT_RUNTIME_MCU_RESET: u16 = 5;
@@ -52,7 +49,6 @@ pub const EVENT_RUNTIME_ISR_PHASE: u16 = 11;
 pub const EVENT_RUNTIME_BLOCK_SOURCE: u16 = 12;
 pub const EVENT_RUNTIME_TIM5_IA: u16 = 13;
 pub const EVENT_RUNTIME_DIAG_DUMP: u16 = 14;
-pub const EVENT_RUNTIME_RING_STATE: u16 = 16;
 pub const EVENT_RUNTIME_FG_TASK: u16 = 17;
 pub const EVENT_RUNTIME_FG_MSG: u16 = 18;
 pub const EVENT_RUNTIME_FG_DEMUX: u16 = 19;
@@ -74,16 +70,8 @@ pub const EVENT_MOTION_STEP_HALT: u16 = 9;
 pub const EVENT_MOTION_STEP_CLOCK_HORIZON: u16 = 10;
 pub const EVENT_MOTION_WIRE_PROBE_LATE: u16 = 11;
 
-pub const EVENT_TICK_INTERVAL_EXCEEDED: u16 = 1;
-pub const EVENT_TICK_UNDERRUN: u16 = 2;
-
-pub const EVENT_ENDSTOP_TRIP: u16 = 1;
-pub const EVENT_ENDSTOP_ARM_TIMEOUT: u16 = 2;
 pub const EVENT_ENDSTOP_TRSYNC_TRIGGER_CMD: u16 = 3;
 pub const EVENT_ENDSTOP_TRSYNC_DO_TRIGGER: u16 = 4;
-pub const EVENT_ENDSTOP_STOP_CB_ENTER: u16 = 5;
-pub const EVENT_ENDSTOP_SOFTWARE_TRIP: u16 = 6;
-pub const EVENT_ENDSTOP_TIM5_HALTED: u16 = 7;
 
 // diag subsystem events (codes mirror MCU DIAG_EV_* tag values 1..=8)
 pub const EVENT_DIAG_TIM5_LONG: u16 = 1;
@@ -106,19 +94,16 @@ pub const EVENT_DIAG_RUST_FAULT: u16 = 8;
 /// # Examples
 ///
 /// ```
-/// use runtime_contract::log_codes::{event_info, SUBSYSTEM_TICK, EVENT_TICK_INTERVAL_EXCEEDED};
+/// use runtime_contract::log_codes::{event_info, SUBSYSTEM_ENDSTOP, EVENT_ENDSTOP_TRSYNC_TRIGGER_CMD};
 ///
-/// let (name, tmpl) = event_info(SUBSYSTEM_TICK, EVENT_TICK_INTERVAL_EXCEEDED);
-/// assert_eq!(name, "tick.interval_exceeded");
+/// let (name, tmpl) = event_info(SUBSYSTEM_ENDSTOP, EVENT_ENDSTOP_TRSYNC_TRIGGER_CMD);
+/// assert_eq!(name, "endstop.trsync_trigger_cmd");
 /// assert!(tmpl.contains("{arg0}") && tmpl.contains("{arg1}"));
 /// ```
 pub fn event_info(subsystem: u8, event: u16) -> (&'static str, &'static str) {
     match (subsystem, event) {
         (SUBSYSTEM_RUNTIME, EVENT_RUNTIME_FAULT_LATCHED) => {
             ("runtime.fault_latched", "fault latched, detail={arg0}")
-        }
-        (SUBSYSTEM_RUNTIME, EVENT_RUNTIME_ENGINE_RESET) => {
-            ("runtime.engine_reset", "engine reset epoch={arg0}")
         }
         (SUBSYSTEM_RUNTIME, EVENT_RUNTIME_MCU_READY) => {
             ("runtime.mcu_ready", "mcu firmware ready, log drain online")
@@ -164,10 +149,6 @@ pub fn event_info(subsystem: u8, event: u16) -> (&'static str, &'static str) {
         (SUBSYSTEM_RUNTIME, EVENT_RUNTIME_DIAG_DUMP) => (
             "runtime.diag_dump",
             "live diag dump uptime_us={arg0} ring_seq={arg1}",
-        ),
-        (SUBSYSTEM_RUNTIME, EVENT_RUNTIME_RING_STATE) => (
-            "runtime.ring_state",
-            "ring axis=code&0xff gated=code>>8 head={arg0} retired={arg1}",
         ),
         (SUBSYSTEM_RUNTIME, EVENT_RUNTIME_FG_TASK) => (
             "runtime.fg_task",
@@ -273,17 +254,6 @@ pub fn event_info(subsystem: u8, event: u16) -> (&'static str, &'static str) {
             "motion.step_clock_horizon",
             "step clock {arg1} is distance={arg0:i32} cyc from the mcu clock, beyond the sync horizon",
         ),
-        (SUBSYSTEM_TICK, EVENT_TICK_INTERVAL_EXCEEDED) => (
-            "tick.interval_exceeded",
-            "TIM5 inter-arrival exceeded: got={arg0} limit={arg1}",
-        ),
-        (SUBSYSTEM_TICK, EVENT_TICK_UNDERRUN) => ("tick.underrun", "tick underrun segment={arg0}"),
-        (SUBSYSTEM_ENDSTOP, EVENT_ENDSTOP_TRIP) => {
-            ("endstop.trip", "endstop tripped arm={arg0} source={arg1}")
-        }
-        (SUBSYSTEM_ENDSTOP, EVENT_ENDSTOP_ARM_TIMEOUT) => {
-            ("endstop.arm_timeout", "endstop arm timeout arm={arg0}")
-        }
         (SUBSYSTEM_ENDSTOP, EVENT_ENDSTOP_TRSYNC_TRIGGER_CMD) => (
             "endstop.trsync_trigger_cmd",
             "trsync_trigger cmd oid={arg0} reason={arg1}",
@@ -291,18 +261,6 @@ pub fn event_info(subsystem: u8, event: u16) -> (&'static str, &'static str) {
         (SUBSYSTEM_ENDSTOP, EVENT_ENDSTOP_TRSYNC_DO_TRIGGER) => (
             "endstop.trsync_do_trigger",
             "trsync_do_trigger flags={arg0} reason={arg1}",
-        ),
-        (SUBSYSTEM_ENDSTOP, EVENT_ENDSTOP_STOP_CB_ENTER) => (
-            "endstop.stop_cb_enter",
-            "runtime_stop_on_trigger_cb arm_id={arg0} reason={arg1}",
-        ),
-        (SUBSYSTEM_ENDSTOP, EVENT_ENDSTOP_SOFTWARE_TRIP) => (
-            "endstop.software_trip",
-            "software_trip arg_arm_id={arg0} state_result={arg1}",
-        ),
-        (SUBSYSTEM_ENDSTOP, EVENT_ENDSTOP_TIM5_HALTED) => (
-            "endstop.tim5_halted",
-            "poll task tripped — TIM5 halted arm_id={arg0} trip_clock={arg1}",
         ),
         _ => ("unknown", ""),
     }

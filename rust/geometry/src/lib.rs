@@ -10,10 +10,10 @@ pub mod path;
 pub mod segment;
 pub mod space;
 pub mod surface;
-pub(crate) mod vec3;
+pub mod vec3;
 pub mod velocity;
 
-pub use error::{Fatal, GeometryError, InternalDetails, InternalKind, Recovery, SlotDegeneracy};
+pub use error::GeometryError;
 pub use fitter::{CornerFitConfig, FitError, UnblendReason, seam_requires_stop};
 pub use frontend::{
     CORNER_DEVIATION_SCV_FACTOR, FrontendError, Move, MoveContext, VelocityLimits,
@@ -33,6 +33,6 @@ pub use surface::{
 };
 pub use velocity::{
     LawSegment, MoveVelocity, ScalarLaw, VelSample, VelocityError, VelocityPlanParams,
-    VelocityProfile, VelocityReport, plan_velocity_stops, plan_velocity_stops_reconstruct_prefix,
+    VelocityProfile, VelocityReport, plan_velocity_stops_reconstruct_prefix,
     plan_velocity_stops_select_prefix,
 };

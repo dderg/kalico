@@ -86,28 +86,11 @@ impl MessageParams {
         self.fields.insert(key.into(), value);
     }
 
-    pub fn get_i32(&self, k: &str) -> i32 {
-        match self.fields.get(k) {
-            Some(MessageValue::I32(v)) => *v,
-            #[allow(clippy::cast_possible_wrap)]
-            Some(MessageValue::U32(v)) => *v as i32,
-            _ => 0,
-        }
-    }
-
     pub fn get_u32(&self, k: &str) -> u32 {
         match self.fields.get(k) {
             Some(MessageValue::U32(v)) => *v,
             #[allow(clippy::cast_sign_loss)]
             Some(MessageValue::I32(v)) => *v as u32,
-            _ => 0,
-        }
-    }
-
-    pub fn get_u64(&self, k: &str) -> u64 {
-        match self.fields.get(k) {
-            Some(MessageValue::U64(v)) => *v,
-            Some(MessageValue::U32(v)) => u64::from(*v),
             _ => 0,
         }
     }

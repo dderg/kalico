@@ -1,4 +1,5 @@
 use crate::lock_ext::LockExt;
+use host_rt::passthrough_queue::McuHandle;
 use std::sync::{Arc, Mutex};
 
 use crate::axis_transport::AxisTransports;
@@ -41,7 +42,7 @@ pub fn reconstruct_axis_position(
         let router_guard = router.lock_ok();
         crate::motion_history::clock_to_host(
             &router_guard,
-            crate::types::mcu_handle_from_raw(endstop_mcu),
+            McuHandle::from_raw(endstop_mcu),
             trip_clock,
         )
         .map_err(|description| {
@@ -110,7 +111,7 @@ pub fn reconstruct_axis_position(
     } else {
         router
             .lock_ok()
-            .host_time_to_mcu_clock(crate::types::mcu_handle_from_raw(axis_mcu), trip_host)
+            .host_time_to_mcu_clock(McuHandle::from_raw(axis_mcu), trip_host)
             .map_err(|e| format!("host_time_to_mcu_clock failed for axis mcu {axis_mcu}: {e:?}"))?
     };
 
@@ -395,31 +396,6 @@ pub fn stepcompress_lane(
     }))
 }
 
-pub fn reconcile_stepcompress_axis(
-    cfg: &McuAxisConfig,
-    axis_key: AxisKey,
-    history_position: f64,
-    query_step_count: &dyn Fn(&StepcompressLane) -> Result<i64, String>,
-    reseed_step_counter: &dyn Fn(&StepcompressLane, i64) -> Result<(), String>,
-) -> Result<f64, String> {
-    let Some(lane) = stepcompress_lane(cfg, axis_key)? else {
-        return Ok(history_position);
-    };
-    let reconciliation = StepcompressReconciliation {
-        lane,
-        history_position,
-        executed_steps: query_step_count(&lane)?,
-    };
-    reconciliation.emit_discrepancy();
-    reseed_step_counter(
-        &reconciliation.lane,
-        reconciliation
-            .lane
-            .trajectory_steps(reconciliation.executed_steps),
-    )?;
-    Ok(reconciliation.executed_position())
-}
-
 /// The pulse lane driving `oid` on `mcu_id`. A keyed endstop trip names the
 /// stepper it froze, and only that motor's stream is cut and reseeded, so the
 /// oid — not the lane index — is the identity the host resolves against.
@@ -468,21 +444,6 @@ pub fn stepcompress_lane_of_oid(
         "stepcompress_lane_of_oid: mcu {mcu_id} has no pulse lane driving stepper oid {oid}; \
          a keyed trip froze a motor this host does not stream to"
     ))
-}
-
-/// The pulse lane driving `axis_key` right now. A dual-transport lane owns a
-/// classic step queue that only holds the motor's truth while the lane is
-/// routed through it; reading its counter mid-phase-mode would adopt a
-/// position the motor left long ago.
-pub fn active_stepcompress_lane(
-    cfg: &McuAxisConfig,
-    transports: &AxisTransports,
-    axis_key: AxisKey,
-) -> Result<Option<StepcompressLane>, String> {
-    if !transports.is_pulse(axis_key) {
-        return Ok(None);
-    }
-    stepcompress_lane(cfg, axis_key)
 }
 
 pub fn reconcile_stepcompress_lanes(

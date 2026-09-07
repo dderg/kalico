@@ -20,7 +20,7 @@
 //! part of the command anchor, and a torque drop (SERVO_SYNC, M84, idle
 //! timeout) resets the trim outright — the sync release is the new zero.
 
-use crate::pair::SlotPair;
+use crate::damper::SlotPair;
 
 pub const ERR_TRIM_BAD_SLOT: i32 = -851;
 pub const ERR_TRIM_BAD_CLAMP: i32 = -852;

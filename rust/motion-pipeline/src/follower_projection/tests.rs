@@ -174,7 +174,7 @@ fn follower_advance_fits_the_transformed_acceleration() {
                 }
                 _ => unreachable!(),
             };
-            let actual = nurbs::eval::eval(&acceleration.as_view(), t);
+            let actual = nurbs::eval::eval(&acceleration, t);
             assert!(
                 (actual - expected).abs() <= 0.5,
                 "advanced acceleration at {t}: {actual} != {expected}"

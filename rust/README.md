@@ -12,7 +12,6 @@ does not reexport the coordinator or service layers.
 | --- | --- |
 | Shared host/MCU contracts | `runtime-contract`: dependency-free `no_std` axis configuration, sample wire/codec, faults, and log catalogue |
 | Wire protocol and I/O | `mcu-protocol`, `mcu-transport`, `host-rt`: messages, transport, host clocks and device connections |
-| Execution accounting | `execution-credit`: dependency-free, allocation-free `no_std` acceptance, progress and interruption reconciliation; no queue or transport |
 | Numerical planning | `nurbs`, `geometry`, `trajectory`, `motion-pipeline`: geometry through continuous motion, with one synchronous pipeline coordinator; no device endpoint |
 | Configuration | `config-doc`, `planner-config`, `config-py`: configuration documents, planner configuration, Python adapter |
 | Output kernels | `step-shim`: pulse compression and quantization; `ethercat-setpoint`: playback and feedforward; `ethercat-setpoint-fill`: host trajectory sampling and buzz generation |
@@ -53,12 +52,6 @@ Host (default — for tests, linting, host-side use):
 
     cargo build
     cargo nextest run
-
-Execution accounting can be tested without any motion-stack dependencies:
-
-    cargo nextest run -p execution-credit
-
-Its packaged source also builds and runs those tests outside this workspace.
 
 Rust-only MCU compile check (H723):
 

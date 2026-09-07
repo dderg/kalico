@@ -36,22 +36,14 @@ fn pump_with_pushed(pushed: u32) -> Pump<NullSink> {
     let mut q = AxisQueue::new(64);
     q.credit.accept(pushed);
     queues.insert(DUAL, q);
-    Pump {
-        queues,
-        junctions: JunctionTracker::default(),
-        cohort: None,
-        halted: BTreeMap::new(),
-        sink: NullSink::default(),
-        callbacks: PumpCallbacks::noop(64),
-        history: None,
-        ledger: Arc::new(crate::drain::DrainLedger::new()),
-        pending_barrier_acks: Vec::new(),
-        release_plan: crate::pump::ReleasePlan::default(),
-        data_open: true,
-        fatal_reason: None,
-        consumption_stall: super::stall::ConsumptionStallWatch::new(Duration::from_secs(60)),
-        mem_probe: super::memstat::MemPressureProbe::new(),
-    }
+    let mut pump = Pump::new(
+        NullSink::default(),
+        PumpCallbacks::noop(64),
+        None,
+        Arc::new(crate::drain::DrainLedger::new()),
+    );
+    pump.queues = queues;
+    pump
 }
 
 fn report(pump: &mut Pump<NullSink>, retired_by: RetiredBy, retired: u32) {

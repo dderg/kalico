@@ -354,12 +354,6 @@ pub fn run_moves_with_chains(
     report
 }
 
-/// Feed the moves through the full streaming pipeline and return the shaped
-/// segments it emits — the trajectory enqueue would dispatch.
-pub fn collect_shaped_segments(moves: &[Move], config: StreamConfig) -> Vec<ContinuousSegment> {
-    collect_shaped_segments_scripted(moves, config, AxisChainSet::default(), None)
-}
-
 pub fn collect_shaped_segments_scripted(
     moves: &[Move],
     config: StreamConfig,

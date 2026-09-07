@@ -958,13 +958,13 @@ fn halt_before_phase_progress_abandons_acceptance_and_resume_retires_only_new_wo
         queue
             .credit
             .interrupt(h.endpoint.abort_axes(&[0]).unwrap().into_iter().map(|cut| {
-                execution_credit::Cut {
+                crate::pump::execution_credit::Cut {
                     source: cut.by as usize,
-                    before: execution_credit::Progress {
+                    before: crate::pump::execution_credit::Progress {
                         consumed: cut.before.0,
                         retired: cut.before.1,
                     },
-                    after: execution_credit::Progress {
+                    after: crate::pump::execution_credit::Progress {
                         consumed: cut.after.0,
                         retired: cut.after.1,
                     },
@@ -1014,7 +1014,7 @@ fn halt_before_phase_progress_abandons_acceptance_and_resume_retires_only_new_wo
     );
     queue.credit.observe(
         crate::pump::RetiredBy::Phase as usize,
-        execution_credit::Progress {
+        crate::pump::execution_credit::Progress {
             consumed: h.endpoint.consumed_counts()[0],
             retired: h.endpoint.retired_counts()[0],
         },
@@ -1024,7 +1024,7 @@ fn halt_before_phase_progress_abandons_acceptance_and_resume_retires_only_new_wo
     h.endpoint.tick().unwrap();
     queue.credit.observe(
         crate::pump::RetiredBy::Phase as usize,
-        execution_credit::Progress {
+        crate::pump::execution_credit::Progress {
             consumed: h.endpoint.consumed_counts()[0],
             retired: h.endpoint.retired_counts()[0],
         },
@@ -1042,7 +1042,7 @@ fn halt_before_phase_progress_abandons_acceptance_and_resume_retires_only_new_wo
     h.endpoint.tick().unwrap();
     queue.credit.observe(
         crate::pump::RetiredBy::Phase as usize,
-        execution_credit::Progress {
+        crate::pump::execution_credit::Progress {
             consumed: h.endpoint.consumed_counts()[0],
             retired: h.endpoint.retired_counts()[0],
         },

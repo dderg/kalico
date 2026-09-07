@@ -728,8 +728,8 @@ fn apply_trailing_stages_to_pieces(
             fit_tol,
         )?);
         let base_position = out.last().map_or(piece.base_position, |previous| {
-            previous.base_position + nurbs::eval::eval(&previous.curve.as_view(), previous.t_end)
-                - nurbs::eval::eval(&curve.as_view(), piece.t_start)
+            previous.base_position + nurbs::eval::eval(&previous.curve, previous.t_end)
+                - nurbs::eval::eval(&curve, piece.t_start)
         });
         out.push(RelativeSplinePiece {
             base_position,

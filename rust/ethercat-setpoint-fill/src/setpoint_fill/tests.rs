@@ -110,7 +110,7 @@ fn positions_are_the_span_evaluated_on_the_dc_grid_in_anchored_counts() {
         let pva = span.eval_at_clock(clock).expect("in span");
         assert_eq!(
             sample.pos_counts,
-            ethercat_setpoint::scale::mm_to_counts(pva.position - origin, CPM)
+            ((pva.position - origin) * CPM).round() as i32
         );
         assert_eq!(sample.vel_ff, (pva.velocity * CPM).round() as i32);
     }

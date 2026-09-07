@@ -24,27 +24,22 @@ use mcu_protocol::{
     },
     Decode, Encode,
 };
-use runtime_contract::error::RUNTIME_ERR_SAMPLE_RING_FULL;
+use runtime_contract::error::FaultCode;
 use trajectory::{
     ClockedMotorSpan, ContinuousAxis, MotorGroup, MotorSpan, MotorTerm, NudgeProfile,
 };
 
 use super::cycle::compute_ring_targets;
 use super::drive::DriveChain;
+use super::sim::SimDrive;
 use super::{discard_motion, EndpointCtx};
-use crate::capture::{Capture, CaptureDriveConfig};
-use crate::damper::{DamperGains, DiffDamperBank};
+use crate::damper::{DamperGains, SlotPair};
 use crate::ffi::EcTelemetry;
-use crate::live_tap::LiveTap;
-use crate::mailbox::{MailboxWorker, WorkerScheduling};
-use crate::pair::SlotPair;
 use crate::sdo::SdoBus;
-use crate::sensorless::SensorlessBank;
 use crate::server::FrameServer;
 use crate::strain_comp::{CompGrid, CompPair};
-use crate::stream_halt::StreamHalt;
 use crate::torque::{TorqueGate, TorqueState};
-use crate::trim::{DiffTrimBank, TrimGains};
+use crate::trim::TrimGains;
 use ethercat_setpoint::dynamics::{FrameParts, ModeParts, PinParts};
 use ethercat_setpoint::setpoint::Played;
 use ethercat_setpoint_fill::buzz::{BuzzRoute, BuzzSweep};
@@ -98,92 +93,19 @@ fn grid(nx: u16, ny: u16, x0: f64, y0: f64, dx: f64, dy: f64) -> CompGrid {
     }
 }
 
-struct TrackingLagDrive {
-    targets: Vec<i32>,
-    drift_counts_per_cycle: Vec<f64>,
-    drifted_counts: Vec<f64>,
-    torque_offsets: Vec<i16>,
-    velocity_offsets: Vec<i32>,
-    torques: Vec<i16>,
+fn at_rest() -> SimDrive {
+    SimDrive::new(NUM_SLAVES).with_following_error(FOLLOWING_ERROR.to_vec())
 }
 
-impl TrackingLagDrive {
-    fn at_rest() -> Self {
-        Self::with_drift(vec![0.0; NUM_SLAVES])
-    }
-
-    /// A rotor sliding uncommanded at a constant counts-per-cycle rate on top
-    /// of its tracking lag — the raw-encoder motion the damper differentiates.
-    fn with_drift(drift_counts_per_cycle: Vec<f64>) -> Self {
-        Self {
-            targets: vec![0; NUM_SLAVES],
-            drift_counts_per_cycle,
-            drifted_counts: vec![0.0; NUM_SLAVES],
-            torque_offsets: vec![0; NUM_SLAVES],
-            velocity_offsets: vec![0; NUM_SLAVES],
-            torques: vec![0; NUM_SLAVES],
-        }
-    }
-
-    /// A pair standing in a constant fight, for the trim tests.
-    fn with_torques(torques: Vec<i16>) -> Self {
-        Self {
-            torques,
-            ..Self::at_rest()
-        }
-    }
+/// A rotor sliding uncommanded at a constant counts-per-cycle rate on top of
+/// its tracking lag — the raw-encoder motion the damper differentiates.
+fn with_drift(drift_counts_per_cycle: Vec<f64>) -> SimDrive {
+    at_rest().with_drift(drift_counts_per_cycle)
 }
 
-impl DriveChain for TrackingLagDrive {
-    fn cycle_time_ns(&self) -> u64 {
-        0
-    }
-    fn cycle(&mut self) -> (i32, i64) {
-        for (pos, drift) in self
-            .drifted_counts
-            .iter_mut()
-            .zip(&self.drift_counts_per_cycle)
-        {
-            *pos += drift;
-        }
-        (0, 0)
-    }
-    fn enable_all(&mut self) -> i32 {
-        0
-    }
-    fn disable_all(&mut self) {}
-    fn shutdown(&mut self) {}
-    fn set_target_position(&mut self, slot: usize, counts: i32) {
-        self.targets[slot] = counts;
-    }
-    fn set_velocity_offset(&mut self, slot: usize, counts_per_s: i32) {
-        self.velocity_offsets[slot] = counts_per_s;
-    }
-    fn set_torque_offset(&mut self, slot: usize, tenths_pct: i16) {
-        self.torque_offsets[slot] = tenths_pct;
-    }
-    fn position_actual(&self, slot: usize) -> i32 {
-        self.targets[slot] - FOLLOWING_ERROR[slot] + self.drifted_counts[slot].round() as i32
-    }
-    fn velocity_actual(&self, _slot: usize) -> i32 {
-        0
-    }
-    fn torque_actual(&self, slot: usize) -> i16 {
-        self.torques[slot]
-    }
-    fn error_code(&self, _slot: usize) -> u16 {
-        0
-    }
-    fn telemetry(&self, slot: usize) -> EcTelemetry {
-        EcTelemetry {
-            target_position: self.targets[slot],
-            position_actual: self.position_actual(slot),
-            torque_offset: self.torque_offsets[slot],
-            velocity_offset: self.velocity_offsets[slot],
-            ..EcTelemetry::default()
-        }
-    }
-    fn dump_al_state(&self) {}
+/// A pair standing in a constant fight, for the trim tests.
+fn with_torques(torques: Vec<i16>) -> SimDrive {
+    at_rest().with_torques(torques)
 }
 
 struct TransitionCounts {
@@ -382,7 +304,7 @@ impl Bench {
 }
 
 fn test_ctx(name: &str) -> Bench {
-    test_ctx_with_drive(name, TrackingLagDrive::at_rest())
+    test_ctx_with_drive(name, at_rest())
 }
 
 fn test_ctx_with_drive(name: &str, drive: impl DriveChain + 'static) -> Bench {
@@ -391,115 +313,23 @@ fn test_ctx_with_drive(name: &str, drive: impl DriveChain + 'static) -> Bench {
 
 fn raw_ctx(name: &str, drive: impl DriveChain + 'static) -> EndpointCtx {
     let sock = std::env::temp_dir().join(format!("ec-rt-test-{}-{name}.sock", std::process::id()));
-    let mut gate = TorqueGate::new();
-    let _ = gate.on_set_torque(true, 0);
-    gate.enable_finished(true);
-    EndpointCtx {
-        server: FrameServer::bind(sock.to_str().expect("utf8 socket path"))
-            .expect("bind test socket"),
-        drive: Box::new(drive),
-        num_slaves: NUM_SLAVES,
-        counts_per_mm: vec![COUNTS_PER_MM; NUM_SLAVES],
-        invert: vec![false; NUM_SLAVES],
-        cmd_counts_per_mm: vec![COUNTS_PER_MM; NUM_SLAVES],
-        rotation_distance: vec![40.0; NUM_SLAVES],
-        slave_axes: vec![0, 1],
-        velocity_ff: vec![false; NUM_SLAVES],
-        torque_clamp_tenths: vec![0; NUM_SLAVES],
-        jump_log_counts: vec![1638; NUM_SLAVES],
-        cycle_ns: CYCLE_NS as i64,
-        group_delay_ns: 0,
-        telemetry_period: u64::MAX,
-        dynamics: None,
-        pin: super::cycle::PinState::default(),
-        drive_dirs: vec![1.0; NUM_SLAVES],
-        drive_scratch: super::cycle::DriveScratch::new(NUM_SLAVES),
-        run_limits: Vec::new(),
-        sp_rings: (0..NUM_SLAVES)
-            .map(|slot| ethercat_setpoint::setpoint::SetpointRing::new(slot, CYCLE_NS as u32))
-            .collect(),
-        grid: ethercat_setpoint::setpoint::SampleGrid::new(CYCLE_NS),
-        ring_origin: vec![None; NUM_SLAVES],
-        sp_play_scratch: vec![None; NUM_SLAVES],
-        sp_fill_scratch: Vec::with_capacity(ethercat_setpoint::setpoint::MAX_FILL_CYCLES),
-        reclaim: crate::reclaim::Reclaim::spawn(),
-        last_grid_index: 0,
-        last_grid_clock: 0,
-        damper: DiffDamperBank::new(CYCLE_NS as i64),
-        trim: DiffTrimBank::new(CYCLE_NS as i64),
-        comp: crate::strain_comp::StrainCompBank::new(CYCLE_NS as i64),
-        last_counts: vec![None; NUM_SLAVES],
-        last_written_offset: vec![0; NUM_SLAVES],
-        report_anchor: vec![None; NUM_SLAVES],
-        last_streamed_target: vec![None; NUM_SLAVES],
-        suppressed: vec![false; NUM_SLAVES],
-        last_sent_retired: 0,
-        heartbeat_sent: false,
-        gate,
-        capture: Capture::new(),
-        live_tap: LiveTap::spawn(
-            sock.with_extension("live").to_str().expect("utf8 tap path"),
-            vec![CaptureDriveConfig {
-                slot: 0,
-                name: "slot0".into(),
-                counts_per_mm: COUNTS_PER_MM,
-                rotation_distance: 40.0,
-                invert: false,
-            }],
-            CYCLE_NS as i64,
-        )
-        .expect("bind test tap socket"),
-        tap_slots: (0..NUM_SLAVES as u8).collect(),
-        cycle_index: 0,
-        mailbox: MailboxWorker::spawn(NoSdo, |_, _, _| 0, WorkerScheduling::Normal),
-        pending_starts: Vec::new(),
-        pending_stops: Vec::new(),
-        pending_seed: None,
-        capture_slots: Vec::new(),
-        prdiv: 0,
-        ff_saturation: 0,
-        wkc_consecutive: 0,
-        latched_drive_err: 0,
-        sensorless: SensorlessBank::new(NUM_SLAVES),
-        stream_halt: StreamHalt::default(),
-        late_tolerance_ns: None,
-        timing_armed: true,
-        baseline_reanchor_count: 0,
-        late_frames: 0,
-        late_max_ns: i64::MIN,
-        skip_count_policed: 0,
-        late_frames_total: 0,
-        last_lateness_ns: 0,
-        last_dispatch_ns: 0,
-        last_pre_work_ns: 0,
-        prev_exchange_ns: 0,
-        last_wake_late_ns: 0,
-        last_recv_ns: 0,
-        last_process_ns: 0,
-        last_send_ns: 0,
-        wake_late_max_ns: i64::MIN,
-        recv_max_ns: i64::MIN,
-        process_max_ns: i64::MIN,
-        send_max_ns: i64::MIN,
-        prev_exchange_return: None,
-        last_pre_cycle_ns: 0,
-        last_post_cycle_ns: 0,
-        last_inter_exchange_ns: 0,
-        pre_cycle_max_ns: i64::MIN,
-        post_cycle_max_ns: i64::MIN,
-        inter_exchange_max_ns: i64::MIN,
-        last_nivcsw: 0,
-        last_fault_ns: 0,
-        last_capture_ns: 0,
-        last_wkc_ns: 0,
-        last_heartbeat_ns: 0,
-        last_telemetry_ns: 0,
-        fault_max_ns: i64::MIN,
-        capture_max_ns: i64::MIN,
-        wkc_max_ns: i64::MIN,
-        heartbeat_max_ns: i64::MIN,
-        telemetry_max_ns: i64::MIN,
-    }
+    let sock = sock.to_str().expect("utf8 socket path");
+    let mut ctx = super::sim::sim_endpoint_with_drive(
+        super::SimConfig {
+            server: FrameServer::bind(sock).expect("bind test socket"),
+            live_tap_socket: &format!("{sock}.live"),
+            slave_axes: (0..NUM_SLAVES as u8).collect(),
+            counts_per_mm: vec![COUNTS_PER_MM; NUM_SLAVES],
+            cycle_ns: CYCLE_NS as i64,
+            telemetry_period: u64::MAX,
+        },
+        Box::new(drive),
+        NoSdo,
+    );
+    let _ = ctx.gate.on_set_torque(true, 0);
+    ctx.gate.enable_finished(true);
+    ctx.timing_armed = true;
+    ctx
 }
 
 #[test]
@@ -806,7 +636,7 @@ const CYCLES_PER_S: f64 = 1e9 / CYCLE_NS as f64;
 fn damper_writes_antisymmetric_torque_in_the_drive_frame() {
     let host_diff_mm_s = 10.0;
     let drift = 0.5 * host_diff_mm_s * COUNTS_PER_MM / CYCLES_PER_S;
-    let mut ctx = test_ctx_with_drive("damper", TrackingLagDrive::with_drift(vec![drift, drift]));
+    let mut ctx = test_ctx_with_drive("damper", with_drift(vec![drift, drift]));
     ctx.cmd_counts_per_mm[1] = -COUNTS_PER_MM;
     let gain_tenths_per_mm_s = 2.0;
     assert_eq!(
@@ -839,10 +669,7 @@ fn damper_writes_antisymmetric_torque_in_the_drive_frame() {
 /// target midpoint never moves (carriage-neutral).
 #[test]
 fn trim_zeroes_a_standing_fight_at_commanded_standstill() {
-    let mut ctx = test_ctx_with_drive(
-        "trim-standstill",
-        TrackingLagDrive::with_torques(vec![100, -100]),
-    );
+    let mut ctx = test_ctx_with_drive("trim-standstill", with_torques(vec![100, -100]));
     assert_eq!(
         ctx.trim
             .set(NUM_SLAVES, pair(0, 1), trim_gains(200_000, 500, 25_000, 0)),
@@ -868,10 +695,7 @@ fn trim_zeroes_a_standing_fight_at_commanded_standstill() {
 /// conversion wrong flips a sign here.
 #[test]
 fn trim_handles_a_mirrored_pair_in_both_frames() {
-    let mut ctx = test_ctx_with_drive(
-        "trim-mirror",
-        TrackingLagDrive::with_torques(vec![100, 100]),
-    );
+    let mut ctx = test_ctx_with_drive("trim-mirror", with_torques(vec![100, 100]));
     ctx.cmd_counts_per_mm[1] = -COUNTS_PER_MM;
     assert_eq!(
         ctx.trim
@@ -893,14 +717,8 @@ fn trim_handles_a_mirrored_pair_in_both_frames() {
 /// leave the streamed targets untouched.
 #[test]
 fn trim_freezes_while_the_pair_is_streaming() {
-    let mut trimmed = test_ctx_with_drive(
-        "trim-stream-on",
-        TrackingLagDrive::with_torques(vec![100, -100]),
-    );
-    let mut plain = test_ctx_with_drive(
-        "trim-stream-off",
-        TrackingLagDrive::with_torques(vec![100, -100]),
-    );
+    let mut trimmed = test_ctx_with_drive("trim-stream-on", with_torques(vec![100, -100]));
+    let mut plain = test_ctx_with_drive("trim-stream-off", with_torques(vec![100, -100]));
     assert_eq!(
         trimmed
             .trim
@@ -924,10 +742,7 @@ fn trim_freezes_while_the_pair_is_streaming() {
 /// torque telemetry still carries the decel transient.
 #[test]
 fn trim_waits_out_the_settle_window_after_motion() {
-    let mut ctx = test_ctx_with_drive(
-        "trim-settle",
-        TrackingLagDrive::with_torques(vec![100, -100]),
-    );
+    let mut ctx = test_ctx_with_drive("trim-settle", with_torques(vec![100, -100]));
     assert_eq!(
         ctx.trim.set(
             NUM_SLAVES,
@@ -958,10 +773,7 @@ fn trim_waits_out_the_settle_window_after_motion() {
 #[test]
 fn damper_stays_quiet_on_common_mode_velocity() {
     let drift = 25.0 * COUNTS_PER_MM / CYCLES_PER_S;
-    let mut ctx = test_ctx_with_drive(
-        "damper-cm",
-        TrackingLagDrive::with_drift(vec![drift, drift]),
-    );
+    let mut ctx = test_ctx_with_drive("damper-cm", with_drift(vec![drift, drift]));
     assert_eq!(
         ctx.damper
             .set(NUM_SLAVES, pair(0, 1), damper_gains(2_000, 100, 300_000, 0)),
@@ -2401,7 +2213,7 @@ fn a_run_past_the_frame_cap_never_reaches_the_dc_scratch() {
     let samples = vec![0i32; ethercat_setpoint::setpoint::MAX_FILL_CYCLES + 1];
     let runs = vec![lane_run(0, 0, 40, &samples)];
     let (result, entries) = super::commands::fill_lane_runs(&mut ctx, &runs);
-    assert_eq!(result, RUNTIME_ERR_SAMPLE_RING_FULL);
+    assert_eq!(result, FaultCode::SampleRingFull.as_i32());
     assert_eq!(entries, 0, "nothing was copied");
     assert_eq!(
         ctx.sp_fill_scratch.capacity(),
