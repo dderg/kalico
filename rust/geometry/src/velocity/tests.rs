@@ -1369,3 +1369,25 @@ fn curvature_pinch_corner_plans_with_disk_consistent_samples() {
     window_consistency(&plan.moves[2], clo_k1, 0.0, accel);
     window_consistency(&plan.moves[3], clo_k1, -sigma, accel);
 }
+
+#[test]
+fn accel_change_inside_a_corner_blend_still_plans() {
+    let (kappa_peak, length) = (0.54_f64, 0.2457_f64);
+    let mut moves = continuous_corner_moves(kappa_peak, length, 1e-3, 0.635, 300.0, 10_000.0);
+    moves.truncate(4);
+    moves[3].limits = limits(400.0, 50_000.0);
+    let out = outcome(moves, Vec::new());
+    let plan =
+        plan(&out).expect("a SET_VELOCITY_LIMIT between the two halves of a corner must plan");
+    for (i, m) in plan.moves.iter().enumerate() {
+        let accel = out.moves[i].limits.accel_mm_s2;
+        let reach = (m.entry_v * m.entry_v + 2.0 * accel * m.length).sqrt();
+        assert!(
+            m.exit_v <= reach + 1e-6,
+            "move {i}: exit {} unreachable from entry {} at accel {accel} over {} mm",
+            m.exit_v,
+            m.entry_v,
+            m.length
+        );
+    }
+}

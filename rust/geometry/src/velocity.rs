@@ -231,10 +231,9 @@ where
     let caps = build_move_caps(moves, params, &mut report)?;
     check_entry_ceiling(moves, &caps, entry_v, tol)?;
     let mut plan = seed_seam_velocities(&caps, stop_before, entry_v, &mut report);
-    let geo = compute_run_geometry(&caps, &plan);
-    forward_pass(moves, &caps, &geo, &mut plan.v, tol)?;
-    let (barrier, v_barrier) = reverse_brake_envelope(moves, &caps, &geo, &mut plan.v, tol)?;
-    check_entry_brake(moves, &caps, &geo, &plan.v, entry_v, tol)?;
+    forward_pass(moves, &caps, &mut plan.v, tol)?;
+    let (barrier, v_barrier) = reverse_brake_envelope(moves, &caps, &mut plan.v, tol)?;
+    check_entry_brake(moves, &caps, &plan.v, entry_v, tol)?;
     let reconstruct_count = select_prefix(barrier);
     assert!(
         reconstruct_count <= n,
@@ -386,67 +385,9 @@ fn seed_seam_velocities(
     SeamPlan { v, is_anchor }
 }
 
-fn accel_reach_v(v0: f64, ds: f64, accel: f64) -> Option<f64> {
-    if !v0.is_finite()
-        || !ds.is_finite()
-        || !accel.is_finite()
-        || v0 < 0.0
-        || accel <= 0.0
-        || ds < 0.0
-    {
-        return None;
-    }
-    if ds == 0.0 {
-        return Some(v0);
-    }
-    Some((v0 * v0 + 2.0 * accel * ds).sqrt())
-}
-
-struct RunGeometry {
-    run_start_v: Vec<f64>,
-    arc_from_run_start: Vec<f64>,
-    arc_to_run_end: Vec<f64>,
-}
-
-fn compute_run_geometry(caps: &[MoveCaps], plan: &SeamPlan) -> RunGeometry {
-    let n = caps.len();
-    let mut run_start_v = vec![0.0_f64; n];
-    let mut arc_from_run_start = vec![0.0_f64; n];
-    {
-        let mut anchor_v = plan.v[0];
-        let mut cum = 0.0;
-        for j in 0..n {
-            if plan.is_anchor[j] {
-                anchor_v = plan.v[j];
-                cum = 0.0;
-            }
-            run_start_v[j] = anchor_v;
-            arc_from_run_start[j] = cum;
-            cum += caps[j].kin.length;
-        }
-    }
-    let mut arc_to_run_end = vec![0.0_f64; n];
-    {
-        let mut cum = 0.0;
-        for j in (0..n).rev() {
-            if plan.is_anchor[j + 1] {
-                cum = 0.0;
-            }
-            arc_to_run_end[j] = cum;
-            cum += caps[j].kin.length;
-        }
-    }
-    RunGeometry {
-        run_start_v,
-        arc_from_run_start,
-        arc_to_run_end,
-    }
-}
-
 fn forward_pass(
     moves: &[crate::Move],
     caps: &[MoveCaps],
-    geo: &RunGeometry,
     v: &mut [f64],
     tol: f64,
 ) -> Result<(), VelocityError> {
@@ -460,13 +401,7 @@ fn forward_pass(
         if moves[j].limits.max_jerk_mm_s3 != f64::INFINITY {
             return Err(VelocityError::Diverged { line_no });
         }
-        let accel = accel_reach_v(
-            geo.run_start_v[j],
-            geo.arc_from_run_start[j] + kin.length,
-            kin.accel,
-        )
-        .ok_or(VelocityError::Diverged { line_no })?;
-        v[k] = v[k].min(disk).min(accel);
+        v[k] = v[k].min(disk);
     }
     Ok(())
 }
@@ -474,7 +409,6 @@ fn forward_pass(
 fn reverse_brake_envelope(
     moves: &[crate::Move],
     caps: &[MoveCaps],
-    geo: &RunGeometry,
     v: &mut [f64],
     tol: f64,
 ) -> Result<(usize, f64), VelocityError> {
@@ -486,10 +420,8 @@ fn reverse_brake_envelope(
         let kin = &caps[j].kin;
         let disk = disk::disk_reach_v_rev(kin, v[k + 1], kin.length, tol)
             .ok_or(VelocityError::Diverged { line_no })?;
-        let accel = accel_reach_v(0.0, geo.arc_to_run_end[j] + kin.length, kin.accel)
-            .ok_or(VelocityError::Diverged { line_no })?;
         let forward_ceiling = v[k];
-        v[k] = v[k].min(disk).min(accel);
+        v[k] = v[k].min(disk);
         if barrier == 0 && !(v[k] < forward_ceiling) {
             barrier = k;
         }
@@ -501,25 +433,16 @@ fn reverse_brake_envelope(
 fn check_entry_brake(
     moves: &[crate::Move],
     caps: &[MoveCaps],
-    geo: &RunGeometry,
     v: &[f64],
     entry_v: f64,
     tol: f64,
 ) -> Result<(), VelocityError> {
     let entry_line_no = moves[0].source.start_line;
-    let entry_brake = {
-        let kin = &caps[0].kin;
-        let disk =
-            disk::disk_reach_v_rev(kin, v[1], kin.length, tol).ok_or(VelocityError::Diverged {
-                line_no: entry_line_no,
-            })?;
-        let accel = accel_reach_v(0.0, geo.arc_to_run_end[0] + kin.length, kin.accel).ok_or(
-            VelocityError::Diverged {
-                line_no: entry_line_no,
-            },
-        )?;
-        disk.min(accel)
-    };
+    let kin = &caps[0].kin;
+    let entry_brake =
+        disk::disk_reach_v_rev(kin, v[1], kin.length, tol).ok_or(VelocityError::Diverged {
+            line_no: entry_line_no,
+        })?;
     if entry_v > entry_brake + tol * (1.0 + entry_brake) {
         return Err(VelocityError::OverCommitted {
             line_no: entry_line_no,
